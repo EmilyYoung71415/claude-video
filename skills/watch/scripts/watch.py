@@ -22,6 +22,20 @@ from transcribe import filter_range, format_transcript, parse_transcript_file, p
 from whisper import load_api_key, local_whisper_setup_message, transcribe_video, transcribe_video_local  # noqa: E402
 
 
+def _is_youtube_url(source: str) -> bool:
+    lowered = source.lower()
+    return "youtube.com/" in lowered or "youtu.be/" in lowered
+
+
+def _can_transcribe_without_download(args) -> bool:
+    if args.no_whisper:
+        return False
+    if args.whisper == "local":
+        return local_whisper_setup_message() is None
+    backend, api_key = load_api_key(args.whisper)
+    return bool(backend and api_key)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         prog="watch",
@@ -55,6 +69,11 @@ def main() -> int:
     ap.add_argument("--start", type=str, default=None, help="Range start (SS, MM:SS, or HH:MM:SS)")
     ap.add_argument("--end", type=str, default=None, help="Range end (SS, MM:SS, or HH:MM:SS)")
     ap.add_argument("--out-dir", type=str, default=None, help="Working directory (default: tmp)")
+    ap.add_argument(
+        "--allow-download",
+        action="store_true",
+        help="Allow downloading a URL video when captions are missing.",
+    )
     ap.add_argument(
         "--no-whisper",
         action="store_true",
@@ -116,6 +135,18 @@ def main() -> int:
             except Exception as exc:
                 print(f"[watch] subtitle parse failed: {exc}", file=sys.stderr)
                 transcript_segments = []
+        elif (
+            _is_youtube_url(args.source)
+            and not cue_timestamps
+            and not args.allow_download
+            and not _can_transcribe_without_download(args)
+        ):
+            download_dir = Path.cwd() / "download"
+            raise SystemExit(
+                "This YouTube video has no captions and no configured transcription backend "
+                "(no Whisper API key or local Whisper setup). Ask the user for permission to "
+                f"download the audio, then re-run with `--allow-download --out-dir {download_dir}`."
+            )
 
     # --timestamps needs the video for frame grabs, so it overrides the
     # transcript-mode download skip (and forces a full, not audio-only, fetch).
