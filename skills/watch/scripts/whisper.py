@@ -551,6 +551,64 @@ def _timestamp_to_seconds(value) -> float:
         return 0.0
 
 
+def _format_srt_timestamp(seconds: float) -> str:
+    total_ms = max(0, int(round(seconds * 1000)))
+    ms = total_ms % 1000
+    total_s = total_ms // 1000
+    s = total_s % 60
+    total_m = total_s // 60
+    m = total_m % 60
+    h = total_m // 60
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _format_md_timestamp(seconds: float) -> str:
+    total_s = max(0, int(seconds))
+    h = total_s // 3600
+    m = (total_s % 3600) // 60
+    s = total_s % 60
+    if h:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+def write_transcript_artifacts(
+    artifact_dir: Path,
+    segments: list[dict],
+    source: str = "local",
+) -> dict[str, str]:
+    """Write stable raw JSON, SRT, and Markdown transcript artifacts."""
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = artifact_dir / "transcript.json"
+    srt_path = artifact_dir / "transcript.srt"
+    md_path = artifact_dir / "transcript.md"
+
+    raw_path.write_text(
+        json.dumps({"source": source, "segments": segments}, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    srt_blocks: list[str] = []
+    for index, seg in enumerate(segments, start=1):
+        start = _format_srt_timestamp(float(seg.get("start") or 0.0))
+        end = _format_srt_timestamp(float(seg.get("end") or seg.get("start") or 0.0))
+        text = str(seg.get("text") or "").strip()
+        srt_blocks.append(f"{index}\n{start} --> {end}\n{text}")
+    srt_path.write_text("\n\n".join(srt_blocks) + ("\n" if srt_blocks else ""), encoding="utf-8")
+
+    md_lines = []
+    for seg in segments:
+        stamp = _format_md_timestamp(float(seg.get("start") or 0.0))
+        md_lines.append(f"[{stamp}] {str(seg.get('text') or '').strip()}")
+    md_path.write_text("\n".join(md_lines) + ("\n" if md_lines else ""), encoding="utf-8")
+
+    return {
+        "json": str(raw_path),
+        "srt": str(srt_path),
+        "markdown": str(md_path),
+    }
+
+
 def _segment_times(raw: dict) -> tuple[float, float]:
     if isinstance(raw.get("offsets"), dict):
         offsets = raw["offsets"]
@@ -850,6 +908,15 @@ def transcribe_video_local(
     )
     if not segments:
         raise SystemExit("local Whisper returned no transcript segments")
+    artifacts = write_transcript_artifacts(cache_dir / "artifacts", segments, source="local")
+    manifest_path = cache_dir / "local-manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        manifest = {}
+    manifest["artifacts"] = artifacts
+    _write_local_manifest(manifest_path, manifest)
+    print(f"[watch] local transcript artifacts: {cache_dir / 'artifacts'}", file=sys.stderr)
     print(f"[watch] transcribed {len(segments)} segments via local Whisper", file=sys.stderr)
     return segments, "local"
 
