@@ -56,6 +56,12 @@ OPENAI_API_KEY=
 # Allowed values: transcript | efficient | balanced | token-burner
 # Keep the value on its own line with no trailing comment.
 # WATCH_DETAIL=balanced
+
+# Optional local whisper.cpp backend. Use with: --whisper local
+# WATCH_LOCAL_WHISPER_BIN=/path/to/whisper-cli
+# WATCH_LOCAL_WHISPER_MODEL=/path/to/ggml-model.bin
+# WATCH_LOCAL_WHISPER_CHUNK_SECONDS=600
+# WATCH_LOCAL_WHISPER_CACHE_DIR=~/.config/watch/cache/local-whisper
 """
 
 
