@@ -199,7 +199,7 @@ Other knobs (passed to `scripts/watch.py`):
 - `--resolution W` — bump frame width to 1024 px when Claude needs to read on-screen text (slides, terminals, code).
 - `--fps F` — override the auto-fps calculation (still capped at 2 fps).
 - `--transcript PATH` — use an external `.srt` or `.vtt` transcript before platform captions or Whisper. External transcripts are useful with MacWhisper Pro or other local transcription tools, and they avoid uploading audio to Groq/OpenAI.
-- `--whisper groq|openai` — force a specific Whisper backend.
+- `--whisper local|groq|openai` — force a specific Whisper backend.
 - `--no-whisper` — disable transcription entirely; frames only.
 - `--no-dedup` — keep near-duplicate frames. By default a frame-delta pass drops frames that are visually near-identical to the one before them (held slides, static screen recordings, paused video), so the frame budget is spent on distinct content; this flag turns that off.
 - `--out-dir DIR` — keep working files somewhere specific (default: auto-generated tmp dir).
@@ -216,8 +216,27 @@ The script gets a timestamped transcript in one of three ways:
 1. **External transcript (free, highest priority).** Pass `--transcript ./video.srt` or `--transcript ./video.vtt` to use a local subtitle file. This takes precedence over platform captions and Whisper, supports `--start` / `--end` filtering, and does not upload audio.
 2. **Native captions (free).** yt-dlp pulls manual or auto-generated subtitles from the source platform if available.
 3. **Whisper API fallback.** If no external transcript or captions came back (or the source is a local file), the script extracts audio (`ffmpeg -vn -ac 1 -ar 16000 -b:a 64k`, ~0.5 MB/min) and uploads it to whichever Whisper API has a key configured.
+4. **Local Whisper fallback.** Pass `--whisper local` to use a local whisper.cpp-compatible command instead of uploading audio. The script extracts mono 16 kHz audio, splits it into conservative chunks, runs one local command at a time, resumes completed chunks from a manifest, and writes `transcript.json`, `transcript.srt`, and `transcript.md` artifacts in the local cache.
 
-Both keys live in `~/.config/watch/.env`. The script prefers Groq when both are set; override with `--whisper openai` to force OpenAI. Use `--no-whisper` to skip the fallback entirely.
+API keys and local Whisper settings live in `~/.config/watch/.env`. The script prefers Groq when both API keys are set; override with `--whisper openai` to force OpenAI or `--whisper local` to force local transcription. Use `--no-whisper` to skip the fallback entirely.
+
+Local Whisper configuration:
+
+```text
+WATCH_LOCAL_WHISPER_BIN=/path/to/whisper-cli
+WATCH_LOCAL_WHISPER_MODEL=/path/to/ggml-model.bin
+WATCH_LOCAL_WHISPER_CHUNK_SECONDS=600
+WATCH_LOCAL_WHISPER_CACHE_DIR=~/.config/watch/cache/local-whisper
+```
+
+The local command is invoked with `-m <model> -f <chunk.mp3> -of <output-prefix> -oj`, matching whisper.cpp's JSON output mode. `WATCH_LOCAL_WHISPER_CHUNK_SECONDS` defaults to 600 seconds. The cache key includes the input file identity, local executable, model path, and chunk size, so changing those settings avoids stale reuse.
+
+Smoke verification:
+
+```bash
+python3 skills/watch/scripts/smoke-local-whisper.py          # fake local command, fast
+python3 skills/watch/scripts/smoke-local-whisper.py --real   # requires WATCH_LOCAL_WHISPER_BIN and WATCH_LOCAL_WHISPER_MODEL
+```
 
 Whisper-compatible gateways can be configured in the environment, `~/.config/watch/.env`, or the current directory's `.env`:
 

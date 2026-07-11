@@ -82,7 +82,7 @@ Work the frontier: any ticket whose blockers are all done. For this chain, work 
 
 **Blocked by:** 把本地转录完整接入 `/watch` 报告.
 
-- [ ] User-facing setup and usage docs explain local transcription configuration.
-- [ ] Fast default tests do not require a real local model.
-- [ ] A slower manual or optional verification path is documented.
-- [ ] A tiny real local whisper.cpp sample run is performed before the feature is called complete, when the local tool is available.
+- [x] User-facing setup and usage docs explain local transcription configuration.
+- [x] Fast default tests do not require a real local model.
+- [x] A slower manual or optional verification path is documented.
+- [x] A tiny real local whisper.cpp sample run is performed before the feature is called complete, when the local tool is available. This machine does not currently have `WATCH_LOCAL_WHISPER_BIN` and `WATCH_LOCAL_WHISPER_MODEL` configured, so the verified path is the documented fake-command smoke; the real smoke is available via `python3 skills/watch/scripts/smoke-local-whisper.py --real`.
