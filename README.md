@@ -230,7 +230,7 @@ WATCH_LOCAL_WHISPER_CHUNK_SECONDS=600
 WATCH_LOCAL_WHISPER_CACHE_DIR=~/.config/watch/cache/local-whisper
 ```
 
-The local command is invoked with `-m <model> -f <chunk.mp3> -of <output-prefix> -oj`, matching whisper.cpp's JSON output mode. `WATCH_LOCAL_WHISPER_CHUNK_SECONDS` defaults to 600 seconds. The cache key includes the input file identity, local executable, model path, and chunk size, so changing those settings avoids stale reuse.
+The local command is invoked with `-m <model> -f <chunk.wav> -of <output-prefix> -oj`, matching whisper.cpp's JSON output mode. `WATCH_LOCAL_WHISPER_CHUNK_SECONDS` defaults to 600 seconds. The cache key includes the input file identity, local executable, model path, and chunk size, so changing those settings avoids stale reuse.
 
 Smoke verification:
 

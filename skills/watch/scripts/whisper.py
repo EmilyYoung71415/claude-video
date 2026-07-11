@@ -303,6 +303,32 @@ def extract_audio(video_path: str, out_path: Path) -> Path:
     return out_path
 
 
+def extract_audio_wav(video_path: str, out_path: Path) -> Path:
+    """Extract mono 16kHz 16-bit WAV for whisper.cpp."""
+    if shutil.which("ffmpeg") is None:
+        raise SystemExit("ffmpeg is not installed. Install with: brew install ffmpeg")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-y",
+        "-i", str(Path(video_path).resolve()),
+        "-vn",
+        "-ar", "16000",
+        "-ac", "1",
+        "-c:a", "pcm_s16le",
+        str(out_path.resolve()),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"ffmpeg WAV extraction failed: {result.stderr.strip()}")
+    if not out_path.exists() or out_path.stat().st_size == 0:
+        raise SystemExit("ffmpeg produced no audio — video may have no audio track")
+    return out_path
+
+
 def audio_duration(audio_path: Path) -> float:
     """Return the duration of an audio file in seconds via ffprobe."""
     if shutil.which("ffprobe") is None:
@@ -332,8 +358,8 @@ def split_audio(
 ) -> list[tuple[Path, float]]:
     """Slice full_audio into per-plan chunk files, returning (path, offset) pairs.
 
-    Uses stream copy (`-c copy`) so there is no re-encode and no quality loss;
-    mp3 frame boundaries are close enough for transcription's purposes.
+    Re-encodes each chunk to match the output suffix. This keeps local
+    whisper.cpp chunks as 16-bit WAV while API chunks stay compact MP3.
     """
     if shutil.which("ffmpeg") is None:
         raise SystemExit("ffmpeg is not installed. Install with: brew install ffmpeg")
@@ -341,7 +367,11 @@ def split_audio(
     work_dir.mkdir(parents=True, exist_ok=True)
     chunks: list[tuple[Path, float]] = []
     for index, (offset, duration) in enumerate(plan):
-        out_path = work_dir / f"chunk_{index:03d}.mp3"
+        out_path = work_dir / f"chunk_{index:03d}{full_audio.suffix.lower() or '.mp3'}"
+        if out_path.suffix.lower() == ".wav":
+            codec_args = ["-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le"]
+        else:
+            codec_args = ["-c", "copy"]
         cmd = [
             "ffmpeg",
             "-hide_banner",
@@ -350,7 +380,7 @@ def split_audio(
             "-ss", f"{offset:.3f}",
             "-i", str(full_audio.resolve()),
             "-t", f"{duration:.3f}",
-            "-c", "copy",
+            *codec_args,
             str(out_path.resolve()),
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -881,11 +911,11 @@ def transcribe_video_local(
     cache_key = local_cache_key(video_path, status, chunk_seconds)
     cache_dir = local_cache_root() / cache_key
     cache_dir.mkdir(parents=True, exist_ok=True)
-    audio_path = cache_dir / "audio.mp3"
+    audio_path = cache_dir / "audio.wav"
     if audio_path.exists() and audio_path.stat().st_size > 0:
         print(f"[watch] using cached local audio: {cache_dir}", file=sys.stderr)
     else:
-        audio_path = extract_audio(str(video_path), audio_path)
+        audio_path = extract_audio_wav(str(video_path), audio_path)
     duration = audio_duration(audio_path)
     plan = plan_fixed_chunks(duration, chunk_seconds)
     print(
@@ -894,7 +924,7 @@ def transcribe_video_local(
         file=sys.stderr,
     )
     chunks_dir = cache_dir / "chunks"
-    expected_chunks = [chunks_dir / f"chunk_{index:03d}.mp3" for index in range(len(plan))]
+    expected_chunks = [chunks_dir / f"chunk_{index:03d}.wav" for index in range(len(plan))]
     if expected_chunks and all(path.exists() and path.stat().st_size > 0 for path in expected_chunks):
         chunks = [(path, plan[index][0]) for index, path in enumerate(expected_chunks)]
         print(f"[watch] using cached local chunks: {cache_dir}", file=sys.stderr)
@@ -905,7 +935,7 @@ def transcribe_video_local(
         chunks,
         plan,
         audio_path,
-        cache_dir / "audio.mp3",
+        cache_dir / "audio.wav",
         chunk_seconds,
         status,
     )
