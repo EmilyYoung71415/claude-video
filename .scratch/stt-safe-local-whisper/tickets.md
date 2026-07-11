@@ -36,11 +36,11 @@ Work the frontier: any ticket whose blockers are all done. For this chain, work 
 
 **Blocked by:** 建立安全的分段转录流程.
 
-- [ ] A manifest records chunk status after each completed chunk.
-- [ ] A resumed run skips completed chunks.
-- [ ] Failed chunks are recorded clearly.
-- [ ] One failed chunk does not erase successful chunk output.
-- [ ] If every chunk fails, the workflow reports failure clearly.
+- [x] A manifest records chunk status after each completed chunk.
+- [x] A resumed run skips completed chunks.
+- [x] Failed chunks are recorded clearly.
+- [x] One failed chunk does not erase successful chunk output.
+- [x] If every chunk fails, the workflow reports failure clearly.
 
 ## 加入缓存复用
 

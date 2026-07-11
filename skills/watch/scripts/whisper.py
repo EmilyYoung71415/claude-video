@@ -571,6 +571,115 @@ def _run_local_whisper(audio_path: Path, out_prefix: Path, status: dict) -> list
     return segments
 
 
+def _new_local_manifest(
+    audio_path: Path,
+    chunks: list[tuple[Path, float]],
+    plan: list[tuple[float, float]],
+    chunk_seconds: float,
+) -> dict:
+    return {
+        "audio": str(audio_path.resolve()),
+        "chunk_seconds": chunk_seconds,
+        "chunks": [
+            {
+                "index": index,
+                "audio": str(path.resolve()),
+                "offset": offset,
+                "duration": plan[index][1],
+                "status": "pending",
+                "segments": [],
+                "error": "",
+            }
+            for index, (path, offset) in enumerate(chunks)
+        ],
+    }
+
+
+def _load_or_create_local_manifest(
+    manifest_path: Path,
+    audio_path: Path,
+    chunks: list[tuple[Path, float]],
+    plan: list[tuple[float, float]],
+    chunk_seconds: float,
+) -> dict:
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            manifest = {}
+        if (
+            manifest.get("audio") == str(audio_path.resolve())
+            and manifest.get("chunk_seconds") == chunk_seconds
+            and len(manifest.get("chunks") or []) == len(chunks)
+        ):
+            return manifest
+    manifest = _new_local_manifest(audio_path, chunks, plan, chunk_seconds)
+    _write_local_manifest(manifest_path, manifest)
+    return manifest
+
+
+def _write_local_manifest(manifest_path: Path, manifest: dict) -> None:
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _transcribe_local_chunks_with_manifest(
+    chunks: list[tuple[Path, float]],
+    plan: list[tuple[float, float]],
+    audio_path: Path,
+    audio_out: Path,
+    chunk_seconds: float,
+    status: dict,
+) -> list[dict]:
+    manifest_path = audio_out.parent / "local-manifest.json"
+    manifest = _load_or_create_local_manifest(
+        manifest_path,
+        audio_path,
+        chunks,
+        plan,
+        chunk_seconds,
+    )
+    segments: list[dict] = []
+    failures = 0
+    for index, (path, offset) in enumerate(chunks):
+        entry = manifest["chunks"][index]
+        if entry.get("status") == "complete" and entry.get("segments"):
+            segments.extend(entry["segments"])
+            print(f"[watch] chunk {index + 1}/{len(chunks)} already complete — skipping", file=sys.stderr)
+            continue
+
+        out_prefix = audio_out.parent / "local-transcripts" / path.stem
+        out_prefix.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            chunk_segments = _run_local_whisper(path, out_prefix, status)
+        except SystemExit as exc:
+            failures += 1
+            entry["status"] = "failed"
+            entry["error"] = str(exc)
+            entry["segments"] = []
+            _write_local_manifest(manifest_path, manifest)
+            print(
+                f"[watch] chunk {index + 1}/{len(chunks)} failed — skipping ({exc})",
+                file=sys.stderr,
+            )
+            continue
+
+        shifted = shift_segments(chunk_segments, offset)
+        entry["status"] = "complete"
+        entry["error"] = ""
+        entry["segments"] = shifted
+        _write_local_manifest(manifest_path, manifest)
+        segments.extend(shifted)
+        print(
+            f"[watch] chunk {index + 1}/{len(chunks)} → {len(chunk_segments)} segments",
+            file=sys.stderr,
+        )
+
+    if failures == len(chunks):
+        raise SystemExit("local Whisper failed on every audio chunk")
+    return segments
+
+
 def transcribe_chunks(
     chunks: list[tuple[Path, float]],
     transcribe_one,
@@ -686,12 +795,14 @@ def transcribe_video_local(
     )
     chunks = split_audio(audio_path, audio_out.parent / "local-chunks", plan)
 
-    def transcribe_one(path: Path) -> list[dict]:
-        out_prefix = audio_out.parent / "local-transcripts" / path.stem
-        out_prefix.parent.mkdir(parents=True, exist_ok=True)
-        return _run_local_whisper(path, out_prefix, status)
-
-    segments = transcribe_chunks(chunks, transcribe_one)
+    segments = _transcribe_local_chunks_with_manifest(
+        chunks,
+        plan,
+        audio_path,
+        audio_out,
+        chunk_seconds,
+        status,
+    )
     if not segments:
         raise SystemExit("local Whisper returned no transcript segments")
     print(f"[watch] transcribed {len(segments)} segments via local Whisper", file=sys.stderr)
