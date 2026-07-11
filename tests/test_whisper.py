@@ -327,6 +327,117 @@ Path(out_prefix + ".json").write_text(json.dumps({
             assert "-m" in call["args"]
             assert str(model) in call["args"]
 
+    def test_local_transcription_writes_manifest_and_resumes_completed_chunks(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        video = tmp_path / "clip.mp4"
+        subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-t", "2", "-i", "color=c=blue:s=160x120:r=10",
+                "-f", "lavfi", "-t", "2", "-i", "sine=frequency=440:sample_rate=16000",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-shortest",
+                str(video),
+            ],
+            check=True,
+        )
+        fake = tmp_path / "fake_whisper.py"
+        calls = tmp_path / "calls.jsonl"
+        fake.write_text(
+            """#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+audio = args[args.index("-f") + 1]
+out_prefix = args[args.index("-of") + 1]
+calls = Path(__file__).with_name("calls.jsonl")
+with calls.open("a", encoding="utf-8") as fh:
+    fh.write(Path(audio).name + "\\n")
+index = int(Path(audio).stem.split("_")[-1])
+Path(out_prefix + ".json").write_text(json.dumps({
+    "transcription": [
+        {"offsets": {"from": 0, "to": 1000}, "text": f"chunk {index}"}
+    ]
+}), encoding="utf-8")
+""",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        model = tmp_path / "model.bin"
+        model.write_text("model", encoding="utf-8")
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_BIN", str(fake))
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_MODEL", str(model))
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_CHUNK_SECONDS", "1")
+
+        segments, _backend = whisper.transcribe_video_local(video, tmp_path / "audio.mp3")
+        first_calls = calls.read_text(encoding="utf-8").splitlines()
+        assert first_calls == ["chunk_000.mp3", "chunk_001.mp3"]
+        manifest = json.loads((tmp_path / "local-manifest.json").read_text(encoding="utf-8"))
+        assert [chunk["status"] for chunk in manifest["chunks"]] == ["complete", "complete"]
+
+        segments_again, _backend = whisper.transcribe_video_local(video, tmp_path / "audio.mp3")
+        second_calls = calls.read_text(encoding="utf-8").splitlines()
+
+        assert segments_again == segments
+        assert second_calls == first_calls
+
+    def test_local_transcription_records_failed_chunks_and_keeps_successes(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        video = tmp_path / "clip.mp4"
+        subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-t", "2", "-i", "color=c=blue:s=160x120:r=10",
+                "-f", "lavfi", "-t", "2", "-i", "sine=frequency=440:sample_rate=16000",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-shortest",
+                str(video),
+            ],
+            check=True,
+        )
+        fake = tmp_path / "fake_whisper.py"
+        fake.write_text(
+            """#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+audio = args[args.index("-f") + 1]
+out_prefix = args[args.index("-of") + 1]
+index = int(Path(audio).stem.split("_")[-1])
+if index == 1:
+    raise SystemExit("chunk failed intentionally")
+Path(out_prefix + ".json").write_text(json.dumps({
+    "transcription": [
+        {"offsets": {"from": 0, "to": 1000}, "text": f"chunk {index}"}
+    ]
+}), encoding="utf-8")
+""",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        model = tmp_path / "model.bin"
+        model.write_text("model", encoding="utf-8")
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_BIN", str(fake))
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_MODEL", str(model))
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_CHUNK_SECONDS", "1")
+
+        segments, _backend = whisper.transcribe_video_local(video, tmp_path / "audio.mp3")
+
+        assert [seg["text"] for seg in segments] == ["chunk 0"]
+        manifest = json.loads((tmp_path / "local-manifest.json").read_text(encoding="utf-8"))
+        assert [chunk["status"] for chunk in manifest["chunks"]] == ["complete", "failed"]
+        assert "chunk failed intentionally" in manifest["chunks"][1]["error"]
+
 
 class TestTranscribeChunks:
     def test_shifts_and_concatenates_each_chunk(self):
