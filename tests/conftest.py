@@ -69,6 +69,23 @@ def build_static_clip(
     ])
 
 
+def build_audio_clip(
+    path: Path,
+    duration: float = 1.0,
+    size: str = "320x240",
+    fps: int = 10,
+) -> None:
+    """Small video with a sine audio track for transcript fallback tests."""
+    _run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-t", str(duration), "-i", f"color=c=blue:s={size}:r={fps}",
+        "-f", "lavfi", "-t", str(duration), "-i", "sine=frequency=440:sample_rate=16000",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-shortest",
+        str(path),
+    ])
+
+
 @pytest.fixture(scope="session")
 def cut_clip(tmp_path_factory: pytest.TempPathFactory) -> Path:
     path = tmp_path_factory.mktemp("clips") / "cuts.mp4"
@@ -80,4 +97,11 @@ def cut_clip(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def static_clip(tmp_path_factory: pytest.TempPathFactory) -> Path:
     path = tmp_path_factory.mktemp("clips") / "static.mp4"
     build_static_clip(path)
+    return path
+
+
+@pytest.fixture(scope="session")
+def audio_clip(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    path = tmp_path_factory.mktemp("clips") / "audio.mp4"
+    build_audio_clip(path)
     return path
