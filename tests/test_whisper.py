@@ -377,7 +377,9 @@ Path(out_prefix + ".json").write_text(json.dumps({
         segments, _backend = whisper.transcribe_video_local(video, tmp_path / "audio.mp3")
         first_calls = calls.read_text(encoding="utf-8").splitlines()
         assert first_calls == ["chunk_000.mp3", "chunk_001.mp3"]
-        manifest = json.loads((tmp_path / "local-manifest.json").read_text(encoding="utf-8"))
+        status = whisper.local_whisper_status()
+        cache_dir = whisper.local_cache_root() / whisper.local_cache_key(video, status, 1.0)
+        manifest = json.loads((cache_dir / "local-manifest.json").read_text(encoding="utf-8"))
         assert [chunk["status"] for chunk in manifest["chunks"]] == ["complete", "complete"]
 
         segments_again, _backend = whisper.transcribe_video_local(video, tmp_path / "audio.mp3")
@@ -434,9 +436,78 @@ Path(out_prefix + ".json").write_text(json.dumps({
         segments, _backend = whisper.transcribe_video_local(video, tmp_path / "audio.mp3")
 
         assert [seg["text"] for seg in segments] == ["chunk 0"]
-        manifest = json.loads((tmp_path / "local-manifest.json").read_text(encoding="utf-8"))
+        status = whisper.local_whisper_status()
+        cache_dir = whisper.local_cache_root() / whisper.local_cache_key(video, status, 1.0)
+        manifest = json.loads((cache_dir / "local-manifest.json").read_text(encoding="utf-8"))
         assert [chunk["status"] for chunk in manifest["chunks"]] == ["complete", "failed"]
         assert "chunk failed intentionally" in manifest["chunks"][1]["error"]
+
+    def test_local_cache_identity_changes_with_settings(self, tmp_path: Path):
+        video = tmp_path / "clip.mp4"
+        model = tmp_path / "model.bin"
+        binary = tmp_path / "whisper-cli"
+        video.write_text("video", encoding="utf-8")
+        model.write_text("model", encoding="utf-8")
+        binary.write_text("bin", encoding="utf-8")
+        status = {"binary": str(binary), "model": str(model)}
+
+        first = whisper.local_cache_key(video, status, chunk_seconds=10.0)
+        second = whisper.local_cache_key(video, status, chunk_seconds=20.0)
+
+        assert first != second
+
+    def test_local_transcription_uses_cache_across_work_dirs(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        video = tmp_path / "clip.mp4"
+        subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-t", "1", "-i", "color=c=blue:s=160x120:r=10",
+                "-f", "lavfi", "-t", "1", "-i", "sine=frequency=440:sample_rate=16000",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-shortest",
+                str(video),
+            ],
+            check=True,
+        )
+        fake = tmp_path / "fake_whisper.py"
+        calls = tmp_path / "calls.jsonl"
+        fake.write_text(
+            """#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+out_prefix = args[args.index("-of") + 1]
+calls = Path(__file__).with_name("calls.jsonl")
+with calls.open("a", encoding="utf-8") as fh:
+    fh.write("called\\n")
+Path(out_prefix + ".json").write_text(json.dumps({
+    "transcription": [
+        {"offsets": {"from": 0, "to": 1000}, "text": "cached transcript"}
+    ]
+}), encoding="utf-8")
+""",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        model = tmp_path / "model.bin"
+        model.write_text("model", encoding="utf-8")
+        cache_root = tmp_path / "cache"
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_BIN", str(fake))
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_MODEL", str(model))
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_CHUNK_SECONDS", "10")
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_CACHE_DIR", str(cache_root))
+
+        first_segments, _backend = whisper.transcribe_video_local(video, tmp_path / "run1" / "audio.mp3")
+        second_segments, _backend = whisper.transcribe_video_local(video, tmp_path / "run2" / "audio.mp3")
+
+        assert first_segments == second_segments
+        assert calls.read_text(encoding="utf-8").splitlines() == ["called"]
 
 
 class TestTranscribeChunks:

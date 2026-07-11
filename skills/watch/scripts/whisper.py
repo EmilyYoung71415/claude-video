@@ -11,6 +11,7 @@ Pure stdlib — no `pip install groq` or `pip install openai` needed.
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import math
 import mimetypes
@@ -36,6 +37,7 @@ OPENAI_MODEL = "whisper-1"
 LOCAL_BIN_ENV = "WATCH_LOCAL_WHISPER_BIN"
 LOCAL_MODEL_ENV = "WATCH_LOCAL_WHISPER_MODEL"
 LOCAL_CHUNK_SECONDS_ENV = "WATCH_LOCAL_WHISPER_CHUNK_SECONDS"
+LOCAL_CACHE_DIR_ENV = "WATCH_LOCAL_WHISPER_CACHE_DIR"
 DEFAULT_LOCAL_CHUNK_SECONDS = 600.0
 MIN_LOCAL_CHUNK_SECONDS = 0.25
 
@@ -147,6 +149,36 @@ def local_chunk_seconds() -> float:
     if value <= 0:
         return DEFAULT_LOCAL_CHUNK_SECONDS
     return value
+
+
+def local_cache_root() -> Path:
+    """Return the root directory for reusable local transcription cache."""
+    raw = _config_value(LOCAL_CACHE_DIR_ENV)
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return (CONFIG_FILE.parent / "cache" / "local-whisper").expanduser().resolve()
+
+
+def local_cache_key(video_path: str | Path, status: dict, chunk_seconds: float) -> str:
+    """Build a cache key from the input file and local transcription settings."""
+    path = Path(video_path).expanduser().resolve()
+    try:
+        stat = path.stat()
+        input_id = {
+            "path": str(path),
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        }
+    except OSError:
+        input_id = {"path": str(path)}
+    payload = {
+        "input": input_id,
+        "binary": str(status.get("binary") or ""),
+        "model": str(status.get("model") or ""),
+        "chunk_seconds": chunk_seconds,
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:24]
 
 
 def plan_chunks(
@@ -784,22 +816,35 @@ def transcribe_video_local(
         raise SystemExit(local_whisper_setup_message() or "local Whisper is not configured")
 
     print("[watch] extracting audio for local Whisper…", file=sys.stderr)
-    audio_path = extract_audio(str(video_path), audio_out)
-    duration = audio_duration(audio_path)
     chunk_seconds = local_chunk_seconds()
+    cache_key = local_cache_key(video_path, status, chunk_seconds)
+    cache_dir = local_cache_root() / cache_key
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = cache_dir / "audio.mp3"
+    if audio_path.exists() and audio_path.stat().st_size > 0:
+        print(f"[watch] using cached local audio: {cache_dir}", file=sys.stderr)
+    else:
+        audio_path = extract_audio(str(video_path), audio_path)
+    duration = audio_duration(audio_path)
     plan = plan_fixed_chunks(duration, chunk_seconds)
     print(
         f"[watch] local audio duration {duration:.1f}s — splitting into {len(plan)} "
         f"chunk(s) of up to {chunk_seconds:.1f}s",
         file=sys.stderr,
     )
-    chunks = split_audio(audio_path, audio_out.parent / "local-chunks", plan)
+    chunks_dir = cache_dir / "chunks"
+    expected_chunks = [chunks_dir / f"chunk_{index:03d}.mp3" for index in range(len(plan))]
+    if expected_chunks and all(path.exists() and path.stat().st_size > 0 for path in expected_chunks):
+        chunks = [(path, plan[index][0]) for index, path in enumerate(expected_chunks)]
+        print(f"[watch] using cached local chunks: {cache_dir}", file=sys.stderr)
+    else:
+        chunks = split_audio(audio_path, chunks_dir, plan)
 
     segments = _transcribe_local_chunks_with_manifest(
         chunks,
         plan,
         audio_path,
-        audio_out,
+        cache_dir / "audio.mp3",
         chunk_seconds,
         status,
     )

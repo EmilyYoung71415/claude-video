@@ -48,10 +48,10 @@ Work the frontier: any ticket whose blockers are all done. For this chain, work 
 
 **Blocked by:** 加入进度保存和失败恢复.
 
-- [ ] Cache identity includes the input and selected transcription settings.
-- [ ] Changing model, language, chunk size, or executable configuration avoids stale cache reuse.
-- [ ] A repeated run with unchanged settings skips completed work.
-- [ ] Cache behavior is visible enough for users to understand what happened.
+- [x] Cache identity includes the input and selected transcription settings.
+- [x] Changing model, language, chunk size, or executable configuration avoids stale cache reuse.
+- [x] A repeated run with unchanged settings skips completed work.
+- [x] Cache behavior is visible enough for users to understand what happened.
 
 ## 输出稳定的转录成果
 
