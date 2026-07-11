@@ -185,6 +185,49 @@ class TestWhisperBackendConfig:
         assert whisper.endpoint_for_backend("openai") == "https://config.example.com/v1/audio/transcriptions"
 
 
+class TestLocalWhisperConfig:
+    @pytest.fixture(autouse=True)
+    def _clean_config(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(whisper, "CONFIG_FILE", tmp_path / "missing.env")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("WATCH_LOCAL_WHISPER_BIN", raising=False)
+        monkeypatch.delenv("WATCH_LOCAL_WHISPER_MODEL", raising=False)
+
+    def test_missing_local_config_reports_both_required_values(self):
+        status = whisper.local_whisper_status()
+
+        assert status["configured"] is False
+        assert "WATCH_LOCAL_WHISPER_BIN is not set" in status["problems"]
+        assert "WATCH_LOCAL_WHISPER_MODEL is not set" in status["problems"]
+
+    def test_local_config_accepts_executable_on_path_and_model_file(self, monkeypatch, tmp_path):
+        fake_bin_dir = tmp_path / "bin"
+        fake_bin_dir.mkdir()
+        fake_bin = fake_bin_dir / "whisper-cli"
+        fake_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+        fake_bin.chmod(0o755)
+        model = tmp_path / "ggml-base.bin"
+        model.write_text("model", encoding="utf-8")
+        monkeypatch.setenv("PATH", f"{fake_bin_dir}")
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_BIN", "whisper-cli")
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_MODEL", str(model))
+
+        status = whisper.local_whisper_status()
+
+        assert status["configured"] is True
+        assert status["binary"] == str(fake_bin)
+        assert status["model"] == str(model)
+        assert status["problems"] == []
+
+    def test_local_setup_message_names_config_file_and_env_keys(self):
+        msg = whisper.local_whisper_setup_message()
+
+        assert msg is not None
+        assert "WATCH_LOCAL_WHISPER_BIN" in msg
+        assert "WATCH_LOCAL_WHISPER_MODEL" in msg
+        assert str(whisper.CONFIG_FILE) in msg
+
+
 class TestTranscribeChunks:
     def test_shifts_and_concatenates_each_chunk(self):
         chunks = [(Path("a.mp3"), 0.0), (Path("b.mp3"), 100.0)]

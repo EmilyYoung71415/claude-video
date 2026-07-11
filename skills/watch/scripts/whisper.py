@@ -33,6 +33,8 @@ GROQ_MODEL = "whisper-large-v3"
 
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 OPENAI_MODEL = "whisper-1"
+LOCAL_BIN_ENV = "WATCH_LOCAL_WHISPER_BIN"
+LOCAL_MODEL_ENV = "WATCH_LOCAL_WHISPER_MODEL"
 
 # Both Groq's free tier and OpenAI whisper-1 cap uploads at 25 MB. We target a
 # margin under that so multipart framing overhead never pushes a chunk over.
@@ -76,6 +78,60 @@ def model_for_backend(backend: str) -> str:
     raise SystemExit(f"Unknown whisper backend: {backend}")
 
 
+def local_whisper_status() -> dict:
+    """Return configuration status for the local whisper.cpp backend."""
+    bin_value = _config_value(LOCAL_BIN_ENV)
+    model_value = _config_value(LOCAL_MODEL_ENV)
+    problems: list[str] = []
+
+    resolved_bin = ""
+    if not bin_value:
+        problems.append(f"{LOCAL_BIN_ENV} is not set")
+    else:
+        candidate = Path(bin_value).expanduser()
+        if candidate.parent != Path(".") or candidate.is_absolute():
+            if candidate.exists() and candidate.is_file():
+                resolved_bin = str(candidate.resolve())
+            else:
+                problems.append(f"{LOCAL_BIN_ENV} does not point to a file: {bin_value}")
+        else:
+            found = shutil.which(bin_value)
+            if found:
+                resolved_bin = found
+            else:
+                problems.append(f"{LOCAL_BIN_ENV} is not on PATH: {bin_value}")
+
+    resolved_model = ""
+    if not model_value:
+        problems.append(f"{LOCAL_MODEL_ENV} is not set")
+    else:
+        model_path = Path(model_value).expanduser()
+        if model_path.exists() and model_path.is_file():
+            resolved_model = str(model_path.resolve())
+        else:
+            problems.append(f"{LOCAL_MODEL_ENV} does not point to a file: {model_value}")
+
+    return {
+        "configured": not problems,
+        "binary": resolved_bin,
+        "model": resolved_model,
+        "problems": problems,
+    }
+
+
+def local_whisper_setup_message() -> str | None:
+    """Return an actionable setup message, or None when local Whisper is configured."""
+    status = local_whisper_status()
+    if status["configured"]:
+        return None
+    problems = "; ".join(status["problems"])
+    return (
+        f"{problems}. Configure local whisper.cpp in {CONFIG_FILE} or the environment "
+        f"with {LOCAL_BIN_ENV}=/path/to/whisper-cli and "
+        f"{LOCAL_MODEL_ENV}=/path/to/model.bin."
+    )
+
+
 def plan_chunks(
     total_seconds: float,
     total_bytes: int,
@@ -106,6 +162,9 @@ def load_api_key(preferred: str | None = None) -> tuple[str, str] | tuple[None, 
 
     If `preferred` is "groq" or "openai", only that backend's key is considered.
     """
+    if preferred == "local":
+        return None, None
+
     def _from_env(name: str) -> str | None:
         value = os.environ.get(name)
         return value.strip() if value else None

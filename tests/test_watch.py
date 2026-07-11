@@ -159,3 +159,54 @@ def test_external_transcript_missing_file_is_clear(cut_clip: Path, tmp_path: Pat
 
     assert proc.returncode != 0
     assert "Transcript file not found" in proc.stderr
+
+
+def test_local_whisper_missing_config_is_clear(audio_clip: Path, tmp_path: Path):
+    env = dict(os.environ)
+    env.pop("WATCH_DETAIL", None)
+    env.pop("WATCH_LOCAL_WHISPER_BIN", None)
+    env.pop("WATCH_LOCAL_WHISPER_MODEL", None)
+    env["HOME"] = str(tmp_path)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(WATCH),
+            str(audio_clip),
+            "--detail",
+            "transcript",
+            "--whisper",
+            "local",
+        ],
+        capture_output=True, text=True, env=env,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "**Transcript:** none available" in proc.stdout
+    assert "local Whisper unavailable" in proc.stderr
+    assert "WATCH_LOCAL_WHISPER_BIN" in proc.stderr
+    assert "WATCH_LOCAL_WHISPER_MODEL" in proc.stderr
+
+
+def test_no_whisper_overrides_local_selection(audio_clip: Path, tmp_path: Path):
+    env = dict(os.environ)
+    env.pop("WATCH_DETAIL", None)
+    env.pop("WATCH_LOCAL_WHISPER_BIN", None)
+    env.pop("WATCH_LOCAL_WHISPER_MODEL", None)
+    env["HOME"] = str(tmp_path)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(WATCH),
+            str(audio_clip),
+            "--detail",
+            "transcript",
+            "--whisper",
+            "local",
+            "--no-whisper",
+        ],
+        capture_output=True, text=True, env=env,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "**Transcript:** none available" in proc.stdout
+    assert "local Whisper unavailable" not in proc.stderr
