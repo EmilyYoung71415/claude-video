@@ -52,6 +52,67 @@ def parse_vtt(path: str) -> list[dict]:
     return _dedupe(segments)
 
 
+def parse_srt(path: str) -> list[dict]:
+    text = Path(path).read_text(encoding="utf-8-sig", errors="ignore")
+    lines = text.splitlines()
+
+    segments: list[dict] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if line.isdigit():
+            i += 1
+            if i >= len(lines):
+                break
+            line = lines[i].strip()
+
+        match = TS_RE.match(line)
+        if not match:
+            i += 1
+            continue
+
+        start = _to_seconds(*match.groups()[:4])
+        end = _to_seconds(*match.groups()[4:])
+        i += 1
+
+        cue_lines: list[str] = []
+        while i < len(lines) and lines[i].strip():
+            cleaned = TAG_RE.sub("", lines[i]).strip()
+            if cleaned:
+                cue_lines.append(cleaned)
+            i += 1
+
+        cue_text = " ".join(cue_lines).strip()
+        if cue_text:
+            segments.append({"start": round(start, 2), "end": round(end, 2), "text": cue_text})
+        i += 1
+
+    return _dedupe(segments)
+
+
+def parse_transcript_file(path: str) -> list[dict]:
+    transcript_path = Path(path).expanduser().resolve()
+    if not transcript_path.exists():
+        raise SystemExit(f"Transcript file not found: {transcript_path}")
+    if not transcript_path.is_file():
+        raise SystemExit(f"Transcript path is not a file: {transcript_path}")
+
+    suffix = transcript_path.suffix.lower()
+    if suffix == ".srt":
+        segments = parse_srt(str(transcript_path))
+    elif suffix == ".vtt":
+        segments = parse_vtt(str(transcript_path))
+    else:
+        raise SystemExit(
+            f"Unsupported transcript format: {transcript_path.suffix or '(none)'} "
+            "(expected .srt or .vtt)"
+        )
+
+    if not segments:
+        raise SystemExit(f"Transcript file contains no usable subtitle cues: {transcript_path}")
+    return segments
+
+
 def _dedupe(segments: list[dict]) -> list[dict]:
     """Collapse rolling duplicates common in YouTube auto-subs."""
     out: list[dict] = []

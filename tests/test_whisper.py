@@ -121,6 +121,70 @@ class TestAudioDuration:
         assert whisper.audio_duration(audio) == pytest.approx(5.0, abs=0.5)
 
 
+class TestWhisperBackendConfig:
+    @pytest.fixture(autouse=True)
+    def _clean_config_files(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(whisper, "CONFIG_FILE", tmp_path / "missing.env")
+        monkeypatch.chdir(tmp_path)
+
+    def test_openai_default_endpoint_and_model(self, monkeypatch):
+        monkeypatch.delenv("WATCH_OPENAI_BASE_URL", raising=False)
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        monkeypatch.delenv("WATCH_OPENAI_MODEL", raising=False)
+
+        assert whisper.endpoint_for_backend("openai") == "https://api.openai.com/v1/audio/transcriptions"
+        assert whisper.model_for_backend("openai") == "whisper-1"
+
+    def test_watch_openai_base_url_overrides_default(self, monkeypatch):
+        monkeypatch.setenv("WATCH_OPENAI_BASE_URL", "https://gateway.example.com/v1/")
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+
+        assert whisper.endpoint_for_backend("openai") == "https://gateway.example.com/v1/audio/transcriptions"
+
+    def test_openai_base_url_is_fallback(self, monkeypatch):
+        monkeypatch.delenv("WATCH_OPENAI_BASE_URL", raising=False)
+        monkeypatch.setenv("OPENAI_BASE_URL", "https://fallback.example.com/v1")
+
+        assert whisper.endpoint_for_backend("openai") == "https://fallback.example.com/v1/audio/transcriptions"
+
+    def test_watch_openai_base_url_wins_over_openai_base_url(self, monkeypatch):
+        monkeypatch.setenv("WATCH_OPENAI_BASE_URL", "https://watch.example.com/v1")
+        monkeypatch.setenv("OPENAI_BASE_URL", "https://fallback.example.com/v1")
+
+        assert whisper.endpoint_for_backend("openai") == "https://watch.example.com/v1/audio/transcriptions"
+
+    def test_groq_default_endpoint_and_model(self, monkeypatch):
+        monkeypatch.delenv("WATCH_GROQ_BASE_URL", raising=False)
+        monkeypatch.delenv("WATCH_GROQ_MODEL", raising=False)
+
+        assert whisper.endpoint_for_backend("groq") == "https://api.groq.com/openai/v1/audio/transcriptions"
+        assert whisper.model_for_backend("groq") == "whisper-large-v3"
+
+    def test_groq_base_url_overrides_default_without_double_slash(self, monkeypatch):
+        monkeypatch.setenv("WATCH_GROQ_BASE_URL", "https://groq-gateway.example.com/openai/v1/")
+
+        assert whisper.endpoint_for_backend("groq") == "https://groq-gateway.example.com/openai/v1/audio/transcriptions"
+
+    def test_backend_models_are_configurable(self, monkeypatch):
+        monkeypatch.setenv("WATCH_GROQ_MODEL", "custom-groq")
+        monkeypatch.setenv("WATCH_OPENAI_MODEL", "custom-openai")
+
+        assert whisper.model_for_backend("groq") == "custom-groq"
+        assert whisper.model_for_backend("openai") == "custom-openai"
+
+    def test_base_url_can_come_from_watch_config_file(self, monkeypatch, tmp_path):
+        config_file = tmp_path / ".env"
+        config_file.write_text(
+            "WATCH_OPENAI_BASE_URL=https://config.example.com/v1\n",
+            encoding="utf-8",
+        )
+        monkeypatch.delenv("WATCH_OPENAI_BASE_URL", raising=False)
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        monkeypatch.setattr(whisper, "CONFIG_FILE", config_file)
+
+        assert whisper.endpoint_for_backend("openai") == "https://config.example.com/v1/audio/transcriptions"
+
+
 class TestTranscribeChunks:
     def test_shifts_and_concatenates_each_chunk(self):
         chunks = [(Path("a.mp3"), 0.0), (Path("b.mp3"), 100.0)]

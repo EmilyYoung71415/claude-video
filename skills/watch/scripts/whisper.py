@@ -25,16 +25,55 @@ import uuid
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+from config import CONFIG_FILE, read_env_file
 
-GROQ_ENDPOINT = "https://api.groq.com/openai/v1/audio/transcriptions"
+
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 GROQ_MODEL = "whisper-large-v3"
 
-OPENAI_ENDPOINT = "https://api.openai.com/v1/audio/transcriptions"
+OPENAI_BASE_URL = "https://api.openai.com/v1"
 OPENAI_MODEL = "whisper-1"
 
 # Both Groq's free tier and OpenAI whisper-1 cap uploads at 25 MB. We target a
 # margin under that so multipart framing overhead never pushes a chunk over.
 MAX_UPLOAD_BYTES = 24 * 1024 * 1024
+
+
+def _config_value(name: str) -> str | None:
+    value = os.environ.get(name)
+    if value and value.strip():
+        return value.strip()
+    for path in (CONFIG_FILE, Path.cwd() / ".env"):
+        value = read_env_file(path).get(name)
+        if value and value.strip():
+            return value.strip()
+    return None
+
+
+def _endpoint(base_url: str) -> str:
+    return f"{base_url.rstrip('/')}/audio/transcriptions"
+
+
+def endpoint_for_backend(backend: str) -> str:
+    """Return the Whisper-compatible transcription endpoint for a backend."""
+    if backend == "groq":
+        return _endpoint(_config_value("WATCH_GROQ_BASE_URL") or GROQ_BASE_URL)
+    if backend == "openai":
+        return _endpoint(
+            _config_value("WATCH_OPENAI_BASE_URL")
+            or _config_value("OPENAI_BASE_URL")
+            or OPENAI_BASE_URL
+        )
+    raise SystemExit(f"Unknown whisper backend: {backend}")
+
+
+def model_for_backend(backend: str) -> str:
+    """Return the transcription model for a backend."""
+    if backend == "groq":
+        return _config_value("WATCH_GROQ_MODEL") or GROQ_MODEL
+    if backend == "openai":
+        return _config_value("WATCH_OPENAI_MODEL") or OPENAI_MODEL
+    raise SystemExit(f"Unknown whisper backend: {backend}")
 
 
 def plan_chunks(
@@ -402,12 +441,9 @@ def transcribe_chunks(
 
 def _transcribe_file(backend: str, api_key: str, audio_path: Path) -> list[dict]:
     """Upload one audio file and return its 0-based segments."""
-    if backend == "groq":
-        response = _post_whisper(GROQ_ENDPOINT, api_key, GROQ_MODEL, audio_path)
-    elif backend == "openai":
-        response = _post_whisper(OPENAI_ENDPOINT, api_key, OPENAI_MODEL, audio_path)
-    else:
-        raise SystemExit(f"Unknown whisper backend: {backend}")
+    endpoint = endpoint_for_backend(backend)
+    model = model_for_backend(backend)
+    response = _post_whisper(endpoint, api_key, model, audio_path)
     return _segments_from_response(response)
 
 

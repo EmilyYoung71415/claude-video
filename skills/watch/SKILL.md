@@ -143,6 +143,7 @@ Optional flags:
 - `--detail transcript|efficient|balanced|token-burner` — fidelity/speed dial. `transcript` = no frames (transcript only, skips video download when captions exist); `efficient` = fast keyframes (cap 50); `balanced` = scene-aware frames (cap 100); `token-burner` = scene-aware, uncapped.
 - `--start T` / `--end T` — focus on a section. Accepts `SS`, `MM:SS`, or `HH:MM:SS`. When either is set, fps auto-scales denser (see "Focusing on a section" below).
 - `--timestamps T1,T2,…` — grab a frame at each of these absolute timestamps (`SS`, `MM:SS`, or `HH:MM:SS`). Use this after reading the transcript to capture deictic moments the presenter flags ("look here", "as you can see", "notice this") that visual selection alone may miss. See "Transcript-cue frames" below.
+- `--transcript PATH` — use an external `.srt` or `.vtt` transcript before platform captions or Whisper. Use this when the user provides subtitles from MacWhisper Pro or another local transcription tool. External transcripts do not upload audio to Groq/OpenAI.
 - `--max-frames N` — override the preset cap for tighter token budget (e.g. `--max-frames 40`)
 - `--resolution W` — change frame width in px (default 512; bump to 1024 only if the user needs to read on-screen text)
 - `--fps F` — override auto-fps (clamped to 2 fps max)
@@ -197,6 +198,11 @@ This holds for `transcript` detail too: even with no frames, produce a **summary
 Default behavior comes from `~/.config/watch/.env`:
 
 - `WATCH_DETAIL=transcript|efficient|balanced|token-burner` (default: `balanced`)
+- `WATCH_GROQ_BASE_URL=https://api.groq.com/openai/v1` (optional Groq-compatible gateway)
+- `WATCH_OPENAI_BASE_URL=https://api.openai.com/v1` (optional OpenAI-compatible gateway)
+- `OPENAI_BASE_URL=https://your-gateway.example.com/v1` (OpenAI fallback gateway if `WATCH_OPENAI_BASE_URL` is unset)
+- `WATCH_GROQ_MODEL=whisper-large-v3` (optional Groq model override)
+- `WATCH_OPENAI_MODEL=whisper-1` (optional OpenAI model override)
 
 At `transcript` detail, captions are enough to return a report without downloading video. If captions are missing, the script downloads audio only and tries Whisper. If no transcript can be produced, it reports the limitation clearly; re-run with `--detail balanced` for frames.
 
@@ -220,14 +226,15 @@ Behavior:
 
 ## Transcription
 
-The script gets a timestamped transcript in one of two ways:
+The script gets a timestamped transcript in one of three ways:
 
-1. **Native captions (free, preferred).** yt-dlp pulls manual or auto-generated subtitles from the source platform if available.
-2. **Whisper API fallback.** If no captions came back (or the source is a local file), the script extracts audio (`ffmpeg -vn -ac 1 -ar 16000 -b:a 64k`, ~0.5 MB/min) and uploads it to whichever Whisper API has a key configured:
+1. **External transcript (free, highest priority).** If `--transcript path/to/file.srt` or `--transcript path/to/file.vtt` is provided, parse that file first. It overrides platform captions and Whisper, supports `--start` / `--end` filtering, and does not upload audio.
+2. **Native captions (free).** yt-dlp pulls manual or auto-generated subtitles from the source platform if available.
+3. **Whisper API fallback.** If no external transcript or captions came back (or the source is a local file), the script extracts audio (`ffmpeg -vn -ac 1 -ar 16000 -b:a 64k`, ~0.5 MB/min) and uploads it to whichever Whisper API has a key configured:
    - **Groq** — `whisper-large-v3`. Preferred default: cheaper, faster. Get a key at console.groq.com/keys.
    - **OpenAI** — `whisper-1`. Fallback. Get a key at platform.openai.com/api-keys.
 
-Both keys live in `~/.config/watch/.env`. The script prefers Groq when both are set; override with `--whisper openai` to force OpenAI. Use `--no-whisper` to skip the fallback entirely.
+Both keys live in `~/.config/watch/.env`. The script prefers Groq when both are set; override with `--whisper openai` to force OpenAI. Use `--no-whisper` to skip the fallback entirely. OpenAI endpoint priority is `WATCH_OPENAI_BASE_URL`, then `OPENAI_BASE_URL`, then the official OpenAI URL. Groq uses `WATCH_GROQ_BASE_URL`, then the official Groq URL. The script appends `/audio/transcriptions` automatically.
 
 ## Failure modes and handling
 
@@ -251,13 +258,14 @@ If you already watched a video this session and the user asks a follow-up, do **
 **What this skill does:**
 - Runs `yt-dlp` locally to download the video and pull native captions when the source supports them (public data; the request goes directly to whatever host the URL points at)
 - Runs `ffmpeg` / `ffprobe` locally to extract frames as JPEGs and, when Whisper is needed, a mono 16 kHz audio clip
-- Sends the extracted audio clip to Groq's Whisper API (`api.groq.com/openai/v1/audio/transcriptions`) when `GROQ_API_KEY` is set (preferred — cheaper, faster)
-- Sends the extracted audio clip to OpenAI's audio transcription API (`api.openai.com/v1/audio/transcriptions`) when `OPENAI_API_KEY` is set and Groq is not, or when `--whisper openai` is forced
+- Reads an external `.srt` or `.vtt` file when `--transcript` is provided
+- Sends the extracted audio clip to Groq's Whisper API or the configured `WATCH_GROQ_BASE_URL` when `GROQ_API_KEY` is set (preferred — cheaper, faster)
+- Sends the extracted audio clip to OpenAI's audio transcription API, the configured `WATCH_OPENAI_BASE_URL`, or `OPENAI_BASE_URL` when `OPENAI_API_KEY` is set and Groq is not, or when `--whisper openai` is forced
 - Writes the downloaded video, frames, audio, and an intermediate transcript to a working directory under the system temp dir (or `--out-dir` if specified) so Claude can `Read` them
 - Reads / creates `~/.config/watch/.env` (mode `0600`) to store the Whisper API key(s) and a `SETUP_COMPLETE` marker. As a fallback, also reads `.env` in the current working directory
 
 **What this skill does NOT do:**
-- Does not upload the video itself to any API — only the extracted audio goes out, and only when native captions are missing AND Whisper is not disabled with `--no-whisper`
+- Does not upload the video itself to any API — only the extracted audio goes out, and only when external transcripts/native captions are missing AND Whisper is not disabled with `--no-whisper`
 - Does not access any platform account (no login, no session cookies, no posting) — yt-dlp only ever requests public data
 - Does not share API keys between providers (Groq key only goes to `api.groq.com`, OpenAI key only goes to `api.openai.com`)
 - Does not log, cache, or write API keys to stdout, stderr, or output files

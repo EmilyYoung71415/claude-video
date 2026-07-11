@@ -170,6 +170,7 @@ Captions cover the majority of public videos for free. The Whisper fallback only
 | Download + native captions | `yt-dlp` + `ffmpeg` | Free |
 | Whisper fallback (preferred) | [Groq API key](https://console.groq.com/keys) — `whisper-large-v3` | Cheap, fast |
 | Whisper fallback (alt) | [OpenAI API key](https://platform.openai.com/api-keys) — `whisper-1` | Standard pricing |
+| External transcript | `.srt` or `.vtt` file from MacWhisper Pro or another local tool | Free, no audio upload |
 | Disable Whisper entirely | `--no-whisper` | Free, frames-only when no captions |
 
 ## Usage
@@ -179,6 +180,8 @@ Captions cover the majority of public videos for free. The Whisper fallback only
 /watch https://www.tiktok.com/@user/video/123 summarize this
 /watch ~/Movies/screen-recording.mp4 when does the UI break?
 /watch https://vimeo.com/123 what tools does she mention?
+/watch ./video.mp4 --transcript ./video.srt summarize this
+/watch https://youtu.be/abc --transcript ./manual.vtt --detail balanced
 ```
 
 Focused on a specific section — denser frame budget, lower token cost:
@@ -195,6 +198,7 @@ Other knobs (passed to `scripts/watch.py`):
 - `--max-frames N` — lower the frame cap for a tighter token budget.
 - `--resolution W` — bump frame width to 1024 px when Claude needs to read on-screen text (slides, terminals, code).
 - `--fps F` — override the auto-fps calculation (still capped at 2 fps).
+- `--transcript PATH` — use an external `.srt` or `.vtt` transcript before platform captions or Whisper. External transcripts are useful with MacWhisper Pro or other local transcription tools, and they avoid uploading audio to Groq/OpenAI.
 - `--whisper groq|openai` — force a specific Whisper backend.
 - `--no-whisper` — disable transcription entirely; frames only.
 - `--no-dedup` — keep near-duplicate frames. By default a frame-delta pass drops frames that are visually near-identical to the one before them (held slides, static screen recordings, paused video), so the frame budget is spent on distinct content; this flag turns that off.
@@ -204,6 +208,28 @@ Other knobs (passed to `scripts/watch.py`):
 
 - **Long-video accuracy depends on the detail mode.** On the capped modes (`efficient`, default `balanced`) coverage thins out past ~10 minutes — the frame cap spreads across the whole clip, so the script prints a "sparse scan" warning and you're better off re-running focused with `--start`/`--end`. `token-burner` lifts the cap and keeps *every* scene-change frame across the full video, so it stays complete on longer clips at the cost of more image tokens. The 10-minute mark is guidance for the capped modes, not a hard ceiling.
 - **Detail is one dial.** Defaults are balanced: scene-aware frames, 2 fps max, 100-frame cap. Use `--detail efficient` for a fast 50-frame keyframe pass, or `--detail token-burner` for uncapped scene candidates. Set `WATCH_DETAIL` in `~/.config/watch/.env` to change the default.
+
+## Transcription
+
+The script gets a timestamped transcript in one of three ways:
+
+1. **External transcript (free, highest priority).** Pass `--transcript ./video.srt` or `--transcript ./video.vtt` to use a local subtitle file. This takes precedence over platform captions and Whisper, supports `--start` / `--end` filtering, and does not upload audio.
+2. **Native captions (free).** yt-dlp pulls manual or auto-generated subtitles from the source platform if available.
+3. **Whisper API fallback.** If no external transcript or captions came back (or the source is a local file), the script extracts audio (`ffmpeg -vn -ac 1 -ar 16000 -b:a 64k`, ~0.5 MB/min) and uploads it to whichever Whisper API has a key configured.
+
+Both keys live in `~/.config/watch/.env`. The script prefers Groq when both are set; override with `--whisper openai` to force OpenAI. Use `--no-whisper` to skip the fallback entirely.
+
+Whisper-compatible gateways can be configured in the environment, `~/.config/watch/.env`, or the current directory's `.env`:
+
+```text
+WATCH_GROQ_BASE_URL=https://api.groq.com/openai/v1
+WATCH_OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_BASE_URL=https://your-gateway.example.com/v1
+WATCH_GROQ_MODEL=whisper-large-v3
+WATCH_OPENAI_MODEL=whisper-1
+```
+
+OpenAI endpoint priority is `WATCH_OPENAI_BASE_URL`, then `OPENAI_BASE_URL`, then the official OpenAI URL. Groq uses `WATCH_GROQ_BASE_URL`, then the official Groq URL. The script appends `/audio/transcriptions` automatically.
 
 ## Structure
 

@@ -83,3 +83,79 @@ def test_no_dedup_preserves_static_frames(static_clip: Path):
     out = _run(static_clip, "--no-dedup")
     assert "near-duplicate" not in out
     assert _frame_lines(out) > 1
+
+
+def test_transcript_detail_uses_external_srt_without_whisper(cut_clip: Path, tmp_path: Path):
+    subtitle = tmp_path / "sample.srt"
+    subtitle.write_text(
+        """1
+00:00:00,000 --> 00:00:02,000
+Hello world
+
+2
+00:00:02,000 --> 00:00:04,000
+This is an external subtitle test.
+""",
+        encoding="utf-8",
+    )
+
+    out = _run(cut_clip, "--detail", "transcript", "--transcript", str(subtitle))
+
+    assert "**Transcript:** 2 segments" in out
+    assert "via external transcript (sample.srt)" in out
+    assert "_Source: external transcript (sample.srt)._" in out
+    assert f"**Title:** {cut_clip.name}" in out
+    assert "**Duration:** 00:00 (0.0s)" not in out
+    assert "Hello world" in out
+    assert "This is an external subtitle test." in out
+    assert "skipped (transcript detail)" in out
+
+
+def test_external_vtt_is_filtered_by_range(cut_clip: Path, tmp_path: Path):
+    subtitle = tmp_path / "sample.vtt"
+    subtitle.write_text(
+        """WEBVTT
+
+00:00:00.000 --> 00:00:01.000
+Outside start
+
+00:00:02.000 --> 00:00:04.000
+Inside range
+""",
+        encoding="utf-8",
+    )
+
+    out = _run(
+        cut_clip,
+        "--detail",
+        "transcript",
+        "--transcript",
+        str(subtitle),
+        "--start",
+        "2",
+        "--end",
+        "4",
+    )
+
+    assert "**Transcript:** 1 segments in range" in out
+    assert "Inside range" in out
+    assert "Outside start" not in out
+
+
+def test_external_transcript_missing_file_is_clear(cut_clip: Path, tmp_path: Path):
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(WATCH),
+            str(cut_clip),
+            "--detail",
+            "transcript",
+            "--transcript",
+            str(tmp_path / "missing.srt"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode != 0
+    assert "Transcript file not found" in proc.stderr
