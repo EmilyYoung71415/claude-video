@@ -210,3 +210,50 @@ def test_no_whisper_overrides_local_selection(audio_clip: Path, tmp_path: Path):
     assert proc.returncode == 0, proc.stderr
     assert "**Transcript:** none available" in proc.stdout
     assert "local Whisper unavailable" not in proc.stderr
+
+
+def test_local_whisper_transcript_is_used(audio_clip: Path, tmp_path: Path):
+    fake = tmp_path / "fake_whisper.py"
+    fake.write_text(
+        """#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+out_prefix = args[args.index("-of") + 1]
+Path(out_prefix + ".json").write_text(json.dumps({
+    "transcription": [
+        {"offsets": {"from": 0, "to": 1000}, "text": "local transcript works"}
+    ]
+}), encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    model = tmp_path / "model.bin"
+    model.write_text("model", encoding="utf-8")
+    env = dict(os.environ)
+    env.pop("WATCH_DETAIL", None)
+    env["HOME"] = str(tmp_path)
+    env["WATCH_LOCAL_WHISPER_BIN"] = str(fake)
+    env["WATCH_LOCAL_WHISPER_MODEL"] = str(model)
+    env["WATCH_LOCAL_WHISPER_CHUNK_SECONDS"] = "10"
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(WATCH),
+            str(audio_clip),
+            "--detail",
+            "transcript",
+            "--whisper",
+            "local",
+        ],
+        capture_output=True, text=True, env=env,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "**Transcript:** 1 segments (via whisper (local))" in proc.stdout
+    assert "_Source: whisper (local)._" in proc.stdout
+    assert "local transcript works" in proc.stdout

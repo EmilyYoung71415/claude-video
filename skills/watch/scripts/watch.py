@@ -19,7 +19,7 @@ from config import frame_cap, get_config  # noqa: E402
 from download import download, fetch_captions, is_url  # noqa: E402
 from frames import MAX_FPS, auto_fps, auto_fps_focus, extract_at_timestamps, extract_keyframes, extract_scene_or_uniform, format_time, get_metadata, merge_frames, parse_time, parse_timestamps  # noqa: E402
 from transcribe import filter_range, format_transcript, parse_transcript_file, parse_vtt  # noqa: E402
-from whisper import load_api_key, local_whisper_setup_message, transcribe_video  # noqa: E402
+from whisper import load_api_key, local_whisper_setup_message, transcribe_video, transcribe_video_local  # noqa: E402
 
 
 def main() -> int:
@@ -260,10 +260,16 @@ def main() -> int:
         if setup_message:
             print(f"[watch] local Whisper unavailable: {setup_message}", file=sys.stderr)
         else:
-            print(
-                "[watch] local Whisper is configured, but local transcription is not implemented yet",
-                file=sys.stderr,
-            )
+            try:
+                all_segments, used_backend = transcribe_video_local(
+                    video_path,
+                    work / "audio.mp3",
+                )
+                transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
+                transcript_text = format_transcript(transcript_segments)
+                transcript_source = f"whisper ({used_backend})"
+            except SystemExit as exc:
+                print(f"[watch] local Whisper failed: {exc}", file=sys.stderr)
     elif not transcript_segments and not args.no_whisper and video_path and meta.get("has_audio"):
         backend, api_key = load_api_key(args.whisper)
         if backend and api_key:

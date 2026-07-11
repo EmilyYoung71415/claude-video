@@ -148,7 +148,7 @@ Optional flags:
 - `--resolution W` — change frame width in px (default 512; bump to 1024 only if the user needs to read on-screen text)
 - `--fps F` — override auto-fps (clamped to 2 fps max)
 - `--out-dir DIR` — keep working files somewhere specific (default: an auto-generated tmp dir)
-- `--whisper local|groq|openai` — force a specific Whisper backend (default: prefer Groq if both API keys exist). `local` requires `WATCH_LOCAL_WHISPER_BIN` and `WATCH_LOCAL_WHISPER_MODEL`; the first slice only validates setup and reports clear guidance when either is missing.
+- `--whisper local|groq|openai` — force a specific Whisper backend (default: prefer Groq if both API keys exist). `local` requires `WATCH_LOCAL_WHISPER_BIN` and `WATCH_LOCAL_WHISPER_MODEL`; it extracts low-bitrate audio, splits it into conservative chunks, and runs one local whisper.cpp-compatible command at a time.
 - `--no-whisper` — disable the Whisper fallback entirely (frames-only if no captions)
 - `--no-dedup` — keep near-duplicate frames. By default a frame-delta pass drops frames that are visually near-identical to the previous kept one (held slides, static screen recordings, paused video) so the frame budget goes to distinct content; the report's **Frames** line notes how many were dropped. Pass this only if the user needs every sampled frame (e.g. judging subtle frame-to-frame motion).
 
@@ -233,9 +233,9 @@ The script gets a timestamped transcript in one of three ways:
 3. **Whisper API fallback.** If no external transcript or captions came back (or the source is a local file), the script extracts audio (`ffmpeg -vn -ac 1 -ar 16000 -b:a 64k`, ~0.5 MB/min) and uploads it to whichever Whisper API has a key configured:
    - **Groq** — `whisper-large-v3`. Preferred default: cheaper, faster. Get a key at console.groq.com/keys.
    - **OpenAI** — `whisper-1`. Fallback. Get a key at platform.openai.com/api-keys.
-4. **Local Whisper setup check.** `--whisper local` selects the local whisper.cpp path. For now it validates `WATCH_LOCAL_WHISPER_BIN` and `WATCH_LOCAL_WHISPER_MODEL` and prints setup guidance when they are missing; the safe chunked local transcription flow is implemented in the follow-up slices.
+4. **Local Whisper fallback.** `--whisper local` selects the local whisper.cpp path. It validates `WATCH_LOCAL_WHISPER_BIN` and `WATCH_LOCAL_WHISPER_MODEL`, extracts mono 16 kHz audio, splits it into chunks controlled by `WATCH_LOCAL_WHISPER_CHUNK_SECONDS` (default 600), runs one local command at a time, and stitches chunk timestamps back to source-video time.
 
-Both API keys and local Whisper settings live in `~/.config/watch/.env`. The script prefers Groq when both API keys are set; override with `--whisper openai` to force OpenAI or `--whisper local` to force local setup checking. Use `--no-whisper` to skip the fallback entirely. OpenAI endpoint priority is `WATCH_OPENAI_BASE_URL`, then `OPENAI_BASE_URL`, then the official OpenAI URL. Groq uses `WATCH_GROQ_BASE_URL`, then the official Groq URL. The script appends `/audio/transcriptions` automatically.
+Both API keys and local Whisper settings live in `~/.config/watch/.env`. The script prefers Groq when both API keys are set; override with `--whisper openai` to force OpenAI or `--whisper local` to force local transcription. Use `--no-whisper` to skip the fallback entirely. OpenAI endpoint priority is `WATCH_OPENAI_BASE_URL`, then `OPENAI_BASE_URL`, then the official OpenAI URL. Groq uses `WATCH_GROQ_BASE_URL`, then the official Groq URL. The script appends `/audio/transcriptions` automatically.
 
 ## Failure modes and handling
 

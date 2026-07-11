@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import json
 import subprocess
 from pathlib import Path
 
@@ -226,6 +227,105 @@ class TestLocalWhisperConfig:
         assert "WATCH_LOCAL_WHISPER_BIN" in msg
         assert "WATCH_LOCAL_WHISPER_MODEL" in msg
         assert str(whisper.CONFIG_FILE) in msg
+
+
+class TestLocalWhisperTranscription:
+    @pytest.fixture(autouse=True)
+    def _clean_config(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(whisper, "CONFIG_FILE", tmp_path / "missing.env")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("WATCH_LOCAL_WHISPER_BIN", raising=False)
+        monkeypatch.delenv("WATCH_LOCAL_WHISPER_MODEL", raising=False)
+
+    def test_local_chunk_seconds_uses_env_or_default(self, monkeypatch):
+        monkeypatch.delenv("WATCH_LOCAL_WHISPER_CHUNK_SECONDS", raising=False)
+        assert whisper.local_chunk_seconds() == 600.0
+
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_CHUNK_SECONDS", "3.5")
+        assert whisper.local_chunk_seconds() == 3.5
+
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_CHUNK_SECONDS", "0")
+        assert whisper.local_chunk_seconds() == 600.0
+
+    def test_plan_fixed_chunks_is_contiguous(self):
+        plan = whisper.plan_fixed_chunks(total_seconds=7.0, chunk_seconds=3.0)
+
+        assert plan == [(0.0, 3.0), (3.0, 3.0), (6.0, 1.0)]
+
+    def test_parse_local_whisper_json_accepts_segments_shape(self, tmp_path: Path):
+        payload = tmp_path / "out.json"
+        payload.write_text(
+            json.dumps({
+                "transcription": [
+                    {"offsets": {"from": 1000, "to": 2500}, "text": "hello"},
+                    {"timestamps": {"from": "00:00:02,500", "to": "00:00:04,000"}, "text": "world"},
+                ]
+            }),
+            encoding="utf-8",
+        )
+
+        assert whisper.parse_local_whisper_json(payload) == [
+            {"start": 1.0, "end": 2.5, "text": "hello"},
+            {"start": 2.5, "end": 4.0, "text": "world"},
+        ]
+
+    def test_local_transcription_extracts_splits_and_runs_chunks_in_order(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        video = tmp_path / "clip.mp4"
+        subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-t", "3", "-i", "color=c=blue:s=160x120:r=10",
+                "-f", "lavfi", "-t", "3", "-i", "sine=frequency=440:sample_rate=16000",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-shortest",
+                str(video),
+            ],
+            check=True,
+        )
+        fake = tmp_path / "fake_whisper.py"
+        calls = tmp_path / "calls.jsonl"
+        fake.write_text(
+            """#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+audio = args[args.index("-f") + 1]
+out_prefix = args[args.index("-of") + 1]
+calls = Path(__file__).with_name("calls.jsonl")
+with calls.open("a", encoding="utf-8") as fh:
+    fh.write(json.dumps({"audio": Path(audio).name, "args": args}) + "\\n")
+index = int(Path(audio).stem.split("_")[-1])
+Path(out_prefix + ".json").write_text(json.dumps({
+    "transcription": [
+        {"offsets": {"from": 0, "to": 1000}, "text": f"chunk {index}"}
+    ]
+}), encoding="utf-8")
+""",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        model = tmp_path / "model.bin"
+        model.write_text("model", encoding="utf-8")
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_BIN", str(fake))
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_MODEL", str(model))
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_CHUNK_SECONDS", "1")
+
+        segments, backend = whisper.transcribe_video_local(video, tmp_path / "audio.mp3")
+
+        assert backend == "local"
+        assert [seg["text"] for seg in segments] == ["chunk 0", "chunk 1", "chunk 2"]
+        assert [seg["start"] for seg in segments] == pytest.approx([0.0, 1.0, 2.0], abs=0.25)
+        call_lines = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
+        assert [call["audio"] for call in call_lines] == ["chunk_000.mp3", "chunk_001.mp3", "chunk_002.mp3"]
+        for call in call_lines:
+            assert "-m" in call["args"]
+            assert str(model) in call["args"]
 
 
 class TestTranscribeChunks:
