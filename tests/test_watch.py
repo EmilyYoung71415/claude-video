@@ -257,3 +257,105 @@ Path(out_prefix + ".json").write_text(json.dumps({
     assert "**Transcript:** 1 segments (via whisper (local))" in proc.stdout
     assert "_Source: whisper (local)._" in proc.stdout
     assert "local transcript works" in proc.stdout
+
+
+def test_local_whisper_transcript_is_filtered_by_range(audio_clip: Path, tmp_path: Path):
+    fake = tmp_path / "fake_whisper.py"
+    fake.write_text(
+        """#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+out_prefix = args[args.index("-of") + 1]
+Path(out_prefix + ".json").write_text(json.dumps({
+    "transcription": [
+        {"offsets": {"from": 0, "to": 500}, "text": "outside range"},
+        {"offsets": {"from": 700, "to": 1000}, "text": "inside range"}
+    ]
+}), encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    model = tmp_path / "model.bin"
+    model.write_text("model", encoding="utf-8")
+    env = dict(os.environ)
+    env.pop("WATCH_DETAIL", None)
+    env["HOME"] = str(tmp_path)
+    env["WATCH_LOCAL_WHISPER_BIN"] = str(fake)
+    env["WATCH_LOCAL_WHISPER_MODEL"] = str(model)
+    env["WATCH_LOCAL_WHISPER_CHUNK_SECONDS"] = "10"
+    env["WATCH_LOCAL_WHISPER_CACHE_DIR"] = str(tmp_path / "cache")
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(WATCH),
+            str(audio_clip),
+            "--detail",
+            "transcript",
+            "--whisper",
+            "local",
+            "--start",
+            "0.6",
+            "--end",
+            "1.0",
+        ],
+        capture_output=True, text=True, env=env,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "**Transcript:** 1 segments in range (via whisper (local))" in proc.stdout
+    assert "inside range" in proc.stdout
+    assert "outside range" not in proc.stdout
+
+
+def test_local_whisper_balanced_detail_keeps_frames(audio_clip: Path, tmp_path: Path):
+    fake = tmp_path / "fake_whisper.py"
+    fake.write_text(
+        """#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+out_prefix = args[args.index("-of") + 1]
+Path(out_prefix + ".json").write_text(json.dumps({
+    "transcription": [
+        {"offsets": {"from": 0, "to": 1000}, "text": "local with frames"}
+    ]
+}), encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    model = tmp_path / "model.bin"
+    model.write_text("model", encoding="utf-8")
+    env = dict(os.environ)
+    env.pop("WATCH_DETAIL", None)
+    env["HOME"] = str(tmp_path)
+    env["WATCH_LOCAL_WHISPER_BIN"] = str(fake)
+    env["WATCH_LOCAL_WHISPER_MODEL"] = str(model)
+    env["WATCH_LOCAL_WHISPER_CHUNK_SECONDS"] = "10"
+    env["WATCH_LOCAL_WHISPER_CACHE_DIR"] = str(tmp_path / "cache")
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(WATCH),
+            str(audio_clip),
+            "--detail",
+            "balanced",
+            "--whisper",
+            "local",
+        ],
+        capture_output=True, text=True, env=env,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "**Frames:**" in proc.stdout
+    assert "Frames live at:" in proc.stdout
+    assert "(t=00:00" in proc.stdout
+    assert "local with frames" in proc.stdout

@@ -71,10 +71,10 @@ Work the frontier: any ticket whose blockers are all done. For this chain, work 
 
 **Blocked by:** 输出稳定的转录成果.
 
-- [ ] `/watch` reports local transcription as the transcript source.
-- [ ] Focused `--start` and `--end` runs filter local transcript segments correctly.
-- [ ] Existing frame extraction and report output continue to work.
-- [ ] Existing caption and API Whisper paths remain covered by tests.
+- [x] `/watch` reports local transcription as the transcript source.
+- [x] Focused `--start` and `--end` runs filter local transcript segments correctly.
+- [x] Existing frame extraction and report output continue to work.
+- [x] Existing caption and API Whisper paths remain covered by tests.
 
 ## 做真实验证和文档补齐
 

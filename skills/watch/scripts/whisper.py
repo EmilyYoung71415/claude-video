@@ -532,11 +532,11 @@ def _segments_from_response(data: dict) -> list[dict]:
     return out
 
 
-def _timestamp_to_seconds(value) -> float:
+def _timestamp_to_seconds(value, *, milliseconds: bool = False) -> float:
     """Parse whisper.cpp JSON timestamps in ms numbers or HH:MM:SS.mmm strings."""
     if isinstance(value, (int, float)):
         number = float(value)
-        return round(number / 1000.0 if number >= 1000 else number, 2)
+        return round(number / 1000.0 if milliseconds or number >= 1000 else number, 2)
     if not isinstance(value, str):
         return 0.0
     raw = value.strip().replace(",", ".")
@@ -612,7 +612,10 @@ def write_transcript_artifacts(
 def _segment_times(raw: dict) -> tuple[float, float]:
     if isinstance(raw.get("offsets"), dict):
         offsets = raw["offsets"]
-        return _timestamp_to_seconds(offsets.get("from")), _timestamp_to_seconds(offsets.get("to"))
+        return (
+            _timestamp_to_seconds(offsets.get("from"), milliseconds=True),
+            _timestamp_to_seconds(offsets.get("to"), milliseconds=True),
+        )
     if isinstance(raw.get("timestamps"), dict):
         timestamps = raw["timestamps"]
         return _timestamp_to_seconds(timestamps.get("from")), _timestamp_to_seconds(timestamps.get("to"))
