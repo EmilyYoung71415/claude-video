@@ -121,6 +121,12 @@ class TestAudioDuration:
         _make_mp3(audio, 5.0)
         assert whisper.audio_duration(audio) == pytest.approx(5.0, abs=0.5)
 
+    def test_extract_audio_wav_creates_whisper_cpp_input(self, audio_clip: Path, tmp_path: Path):
+        audio = whisper.extract_audio_wav(str(audio_clip), tmp_path / "audio.wav")
+
+        assert audio.suffix == ".wav"
+        assert audio.exists() and audio.stat().st_size > 0
+
 
 class TestWhisperBackendConfig:
     @pytest.fixture(autouse=True)
@@ -322,7 +328,7 @@ Path(out_prefix + ".json").write_text(json.dumps({
         assert [seg["text"] for seg in segments] == ["chunk 0", "chunk 1", "chunk 2"]
         assert [seg["start"] for seg in segments] == pytest.approx([0.0, 1.0, 2.0], abs=0.25)
         call_lines = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
-        assert [call["audio"] for call in call_lines] == ["chunk_000.mp3", "chunk_001.mp3", "chunk_002.mp3"]
+        assert [call["audio"] for call in call_lines] == ["chunk_000.wav", "chunk_001.wav", "chunk_002.wav"]
         for call in call_lines:
             assert "-m" in call["args"]
             assert str(model) in call["args"]
@@ -376,7 +382,7 @@ Path(out_prefix + ".json").write_text(json.dumps({
 
         segments, _backend = whisper.transcribe_video_local(video, tmp_path / "audio.mp3")
         first_calls = calls.read_text(encoding="utf-8").splitlines()
-        assert first_calls == ["chunk_000.mp3", "chunk_001.mp3"]
+        assert first_calls == ["chunk_000.wav", "chunk_001.wav"]
         status = whisper.local_whisper_status()
         cache_dir = whisper.local_cache_root() / whisper.local_cache_key(video, status, 1.0)
         manifest = json.loads((cache_dir / "local-manifest.json").read_text(encoding="utf-8"))
