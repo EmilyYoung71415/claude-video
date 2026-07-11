@@ -18,7 +18,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from config import frame_cap, get_config  # noqa: E402
 from download import download, fetch_captions, is_url  # noqa: E402
 from frames import MAX_FPS, auto_fps, auto_fps_focus, extract_at_timestamps, extract_keyframes, extract_scene_or_uniform, format_time, get_metadata, merge_frames, parse_time, parse_timestamps  # noqa: E402
-from transcribe import filter_range, format_transcript, parse_vtt  # noqa: E402
+from transcribe import filter_range, format_transcript, parse_transcript_file, parse_vtt  # noqa: E402
 from whisper import load_api_key, transcribe_video  # noqa: E402
 
 
@@ -45,6 +45,12 @@ def main() -> int:
         help="Comma-separated absolute timestamps (SS, MM:SS, HH:MM:SS) to grab a frame at, "
              "e.g. transcript-flagged 'look here' moments. Added on top of the detail frames "
              "(reserved against the cap); with --detail transcript these become the only frames.",
+    )
+    ap.add_argument(
+        "--transcript",
+        type=str,
+        default=None,
+        help="Use an external .srt or .vtt transcript file before platform captions or Whisper.",
     )
     ap.add_argument("--start", type=str, default=None, help="Range start (SS, MM:SS, or HH:MM:SS)")
     ap.add_argument("--end", type=str, default=None, help="Range end (SS, MM:SS, or HH:MM:SS)")
@@ -94,7 +100,12 @@ def main() -> int:
     transcript_source: str | None = None
     video_path: str | None = None
 
-    if url_source:
+    if args.transcript:
+        transcript_segments = parse_transcript_file(args.transcript)
+        transcript_text = format_transcript(transcript_segments)
+        transcript_source = f"external transcript ({Path(args.transcript).name})"
+
+    if url_source and not args.transcript:
         print("[watch] checking metadata/captions via yt-dlp…", file=sys.stderr)
         dl = fetch_captions(args.source, work / "download")
         if dl.get("subtitle_path"):
@@ -108,8 +119,10 @@ def main() -> int:
 
     # --timestamps needs the video for frame grabs, so it overrides the
     # transcript-mode download skip (and forces a full, not audio-only, fetch).
+    # Local files are always resolved so the report can include file metadata
+    # even when an external transcript lets us skip frame/audio work.
     audio_only = detail == "transcript" and not cue_timestamps
-    if detail == "transcript" and transcript_segments and not cue_timestamps:
+    if detail == "transcript" and transcript_segments and not cue_timestamps and url_source:
         video_path = None
     else:
         if url_source:
