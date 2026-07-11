@@ -6,7 +6,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 WATCH = Path(__file__).resolve().parent.parent / "skills" / "watch" / "scripts" / "watch.py"
+SCRIPTS = WATCH.parent
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+import watch  # noqa: E402
 
 
 def _run(clip: Path, *args: str, env_extra: dict | None = None) -> str:
@@ -359,3 +365,75 @@ Path(out_prefix + ".json").write_text(json.dumps({
     assert "Frames live at:" in proc.stdout
     assert "(t=00:00" in proc.stdout
     assert "local with frames" in proc.stdout
+
+
+def test_youtube_without_captions_or_backend_requires_download_permission(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(watch, "fetch_captions", lambda _url, _out: {
+        "subtitle_path": None,
+        "info": {"duration": 12},
+        "downloaded": False,
+    })
+    monkeypatch.setattr(watch, "load_api_key", lambda _preferred=None: (None, None))
+    monkeypatch.setattr(watch, "local_whisper_setup_message", lambda: "local missing")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["watch", "https://www.youtube.com/watch?v=abc123", "--detail", "transcript"],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        watch.main()
+
+    assert "Ask the user for permission to download the audio" in str(exc.value)
+    assert "--allow-download --out-dir" in str(exc.value)
+    assert str(tmp_path / "download") in str(exc.value)
+
+
+def test_allow_download_uses_requested_download_folder(monkeypatch, tmp_path: Path):
+    calls = []
+    fake_video = tmp_path / "download" / "video.mp4"
+    fake_video.parent.mkdir()
+    fake_video.write_text("video", encoding="utf-8")
+    monkeypatch.setattr(watch, "fetch_captions", lambda _url, _out: {
+        "subtitle_path": None,
+        "info": {"duration": 12},
+        "downloaded": False,
+    })
+
+    def fake_download(source, out_dir, audio_only=False):
+        calls.append((source, out_dir, audio_only))
+        return {
+            "video_path": str(fake_video),
+            "subtitle_path": None,
+            "info": {"title": "fake", "duration": 12},
+            "downloaded": True,
+        }
+
+    monkeypatch.setattr(watch, "download", fake_download)
+    monkeypatch.setattr(watch, "get_metadata", lambda _path: {
+        "duration_seconds": 12.0,
+        "width": None,
+        "height": None,
+        "codec": None,
+        "has_audio": False,
+    })
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "watch",
+            "https://www.youtube.com/watch?v=abc123",
+            "--detail",
+            "transcript",
+            "--allow-download",
+            "--out-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert watch.main() == 0
+    assert calls == [("https://www.youtube.com/watch?v=abc123", tmp_path / "download", True)]

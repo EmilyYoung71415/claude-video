@@ -194,6 +194,7 @@ Focused on a specific section — denser frame budget, lower token cost:
 Other knobs (passed to `scripts/watch.py`):
 
 - `--detail transcript|efficient|balanced|token-burner` — fidelity/speed dial. `transcript` skips frames (transcript only); `efficient` uses fast keyframes (cap 50); `balanced` uses scene-aware frames (cap 100); `token-burner` is scene-aware and uncapped.
+- `--allow-download` — allow downloading URL audio when captions are missing. For YouTube URLs with no captions and no configured transcription backend, `/watch` asks for user permission before downloading; re-run with `--allow-download --out-dir download` after approval.
 - `--timestamps T1,T2,…` — grab a frame at each absolute timestamp (`SS`/`MM:SS`/`HH:MM:SS`). Claude reads the transcript first, then targets the moments the presenter flags ("look here", "as you can see"). Added on top of the detail frames (reserved against the cap); out-of-window cues are dropped in focus mode; with `--detail transcript` these become the only frames.
 - `--max-frames N` — lower the frame cap for a tighter token budget.
 - `--resolution W` — bump frame width to 1024 px when Claude needs to read on-screen text (slides, terminals, code).

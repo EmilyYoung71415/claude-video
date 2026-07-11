@@ -141,6 +141,7 @@ python3 "${SKILL_DIR}/scripts/watch.py" "<source>"
 
 Optional flags:
 - `--detail transcript|efficient|balanced|token-burner` — fidelity/speed dial. `transcript` = no frames (transcript only, skips video download when captions exist); `efficient` = fast keyframes (cap 50); `balanced` = scene-aware frames (cap 100); `token-burner` = scene-aware, uncapped.
+- `--allow-download` — allow downloading URL audio when captions are missing. If a YouTube URL has no captions and no configured transcription backend, the script stops and tells you to ask the user before re-running with this flag.
 - `--start T` / `--end T` — focus on a section. Accepts `SS`, `MM:SS`, or `HH:MM:SS`. When either is set, fps auto-scales denser (see "Focusing on a section" below).
 - `--timestamps T1,T2,…` — grab a frame at each of these absolute timestamps (`SS`, `MM:SS`, or `HH:MM:SS`). Use this after reading the transcript to capture deictic moments the presenter flags ("look here", "as you can see", "notice this") that visual selection alone may miss. See "Transcript-cue frames" below.
 - `--transcript PATH` — use an external `.srt` or `.vtt` transcript before platform captions or Whisper. Use this when the user provides subtitles from MacWhisper Pro or another local transcription tool. External transcripts do not upload audio to Groq/OpenAI.
@@ -205,6 +206,14 @@ Default behavior comes from `~/.config/watch/.env`:
 - `WATCH_OPENAI_MODEL=whisper-1` (optional OpenAI model override)
 
 At `transcript` detail, captions are enough to return a report without downloading video. If captions are missing, the script downloads audio only and tries Whisper. If no transcript can be produced, it reports the limitation clearly; re-run with `--detail balanced` for frames.
+
+For YouTube URLs, if captions are missing and there is no configured transcription backend (no API key and no local Whisper), the script refuses to download by default. Ask the user for permission to download the audio. If they agree, re-run with:
+
+```bash
+python3 "${SKILL_DIR}/scripts/watch.py" "<youtube-url>" --allow-download --out-dir download
+```
+
+Use the repo-local `download/` folder exactly as shown unless the user asks for another location. At `transcript` detail this downloads audio only.
 
 At `efficient` detail, the script downloads the video and extracts **keyframes only** (`ffmpeg -skip_frame nokey`) — a near-instant pass that lands frames on scene cuts. If a clip has fewer than 4 keyframes it falls back to uniform sampling.
 
