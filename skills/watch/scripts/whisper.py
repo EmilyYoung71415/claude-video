@@ -35,6 +35,9 @@ OPENAI_BASE_URL = "https://api.openai.com/v1"
 OPENAI_MODEL = "whisper-1"
 LOCAL_BIN_ENV = "WATCH_LOCAL_WHISPER_BIN"
 LOCAL_MODEL_ENV = "WATCH_LOCAL_WHISPER_MODEL"
+LOCAL_CHUNK_SECONDS_ENV = "WATCH_LOCAL_WHISPER_CHUNK_SECONDS"
+DEFAULT_LOCAL_CHUNK_SECONDS = 600.0
+MIN_LOCAL_CHUNK_SECONDS = 0.25
 
 # Both Groq's free tier and OpenAI whisper-1 cap uploads at 25 MB. We target a
 # margin under that so multipart framing overhead never pushes a chunk over.
@@ -132,6 +135,20 @@ def local_whisper_setup_message() -> str | None:
     )
 
 
+def local_chunk_seconds() -> float:
+    """Return the local transcription chunk size in seconds."""
+    raw = _config_value(LOCAL_CHUNK_SECONDS_ENV)
+    if not raw:
+        return DEFAULT_LOCAL_CHUNK_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_LOCAL_CHUNK_SECONDS
+    if value <= 0:
+        return DEFAULT_LOCAL_CHUNK_SECONDS
+    return value
+
+
 def plan_chunks(
     total_seconds: float,
     total_bytes: int,
@@ -154,6 +171,23 @@ def plan_chunks(
         # The last chunk absorbs any rounding remainder so durations sum exactly.
         duration = (total_seconds - offset) if i == n - 1 else chunk
         plan.append((round(offset, 3), round(duration, 3)))
+    return plan
+
+
+def plan_fixed_chunks(total_seconds: float, chunk_seconds: float) -> list[tuple[float, float]]:
+    """Split duration into contiguous fixed-size chunks."""
+    if total_seconds <= 0 or chunk_seconds <= 0:
+        return [(0.0, max(0.0, total_seconds))]
+    plan: list[tuple[float, float]] = []
+    offset = 0.0
+    while offset < total_seconds:
+        duration = min(chunk_seconds, total_seconds - offset)
+        if duration < MIN_LOCAL_CHUNK_SECONDS and plan:
+            prev_offset, prev_duration = plan[-1]
+            plan[-1] = (prev_offset, round(prev_duration + duration, 3))
+            break
+        plan.append((round(offset, 3), round(duration, 3)))
+        offset += duration
     return plan
 
 
@@ -466,6 +500,77 @@ def _segments_from_response(data: dict) -> list[dict]:
     return out
 
 
+def _timestamp_to_seconds(value) -> float:
+    """Parse whisper.cpp JSON timestamps in ms numbers or HH:MM:SS.mmm strings."""
+    if isinstance(value, (int, float)):
+        number = float(value)
+        return round(number / 1000.0 if number >= 1000 else number, 2)
+    if not isinstance(value, str):
+        return 0.0
+    raw = value.strip().replace(",", ".")
+    parts = raw.split(":")
+    try:
+        if len(parts) == 3:
+            return round(int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2]), 2)
+        if len(parts) == 2:
+            return round(int(parts[0]) * 60 + float(parts[1]), 2)
+        return round(float(raw), 2)
+    except ValueError:
+        return 0.0
+
+
+def _segment_times(raw: dict) -> tuple[float, float]:
+    if isinstance(raw.get("offsets"), dict):
+        offsets = raw["offsets"]
+        return _timestamp_to_seconds(offsets.get("from")), _timestamp_to_seconds(offsets.get("to"))
+    if isinstance(raw.get("timestamps"), dict):
+        timestamps = raw["timestamps"]
+        return _timestamp_to_seconds(timestamps.get("from")), _timestamp_to_seconds(timestamps.get("to"))
+    return _timestamp_to_seconds(raw.get("start")), _timestamp_to_seconds(raw.get("end"))
+
+
+def parse_local_whisper_json(path: Path) -> list[dict]:
+    """Parse whisper.cpp JSON output into the shared segment shape."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    raw_segments = data.get("transcription") or data.get("segments") or []
+    out: list[dict] = []
+    for raw in raw_segments:
+        if not isinstance(raw, dict):
+            continue
+        text = (raw.get("text") or "").strip()
+        if not text:
+            continue
+        start, end = _segment_times(raw)
+        out.append({"start": start, "end": end, "text": text})
+    if not out:
+        text = (data.get("text") or "").strip()
+        if text:
+            out.append({"start": 0.0, "end": 0.0, "text": text})
+    return out
+
+
+def _run_local_whisper(audio_path: Path, out_prefix: Path, status: dict) -> list[dict]:
+    """Run one local whisper.cpp-compatible transcription command."""
+    cmd = [
+        str(status["binary"]),
+        "-m", str(status["model"]),
+        "-f", str(audio_path.resolve()),
+        "-of", str(out_prefix.resolve()),
+        "-oj",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise SystemExit(f"local Whisper command failed: {detail}")
+    json_path = out_prefix.with_suffix(".json")
+    if not json_path.exists():
+        raise SystemExit(f"local Whisper produced no JSON output: {json_path}")
+    segments = parse_local_whisper_json(json_path)
+    if not segments:
+        raise SystemExit(f"local Whisper produced no transcript segments: {json_path}")
+    return segments
+
+
 def transcribe_chunks(
     chunks: list[tuple[Path, float]],
     transcribe_one,
@@ -558,6 +663,39 @@ def transcribe_video(
 
     print(f"[watch] transcribed {len(segments)} segments via {backend}", file=sys.stderr)
     return segments, backend
+
+
+def transcribe_video_local(
+    video_path: str | Path,
+    audio_out: Path,
+) -> tuple[list[dict], str]:
+    """Run local whisper.cpp transcription one chunk at a time."""
+    status = local_whisper_status()
+    if not status["configured"]:
+        raise SystemExit(local_whisper_setup_message() or "local Whisper is not configured")
+
+    print("[watch] extracting audio for local Whisper…", file=sys.stderr)
+    audio_path = extract_audio(str(video_path), audio_out)
+    duration = audio_duration(audio_path)
+    chunk_seconds = local_chunk_seconds()
+    plan = plan_fixed_chunks(duration, chunk_seconds)
+    print(
+        f"[watch] local audio duration {duration:.1f}s — splitting into {len(plan)} "
+        f"chunk(s) of up to {chunk_seconds:.1f}s",
+        file=sys.stderr,
+    )
+    chunks = split_audio(audio_path, audio_out.parent / "local-chunks", plan)
+
+    def transcribe_one(path: Path) -> list[dict]:
+        out_prefix = audio_out.parent / "local-transcripts" / path.stem
+        out_prefix.parent.mkdir(parents=True, exist_ok=True)
+        return _run_local_whisper(path, out_prefix, status)
+
+    segments = transcribe_chunks(chunks, transcribe_one)
+    if not segments:
+        raise SystemExit("local Whisper returned no transcript segments")
+    print(f"[watch] transcribed {len(segments)} segments via local Whisper", file=sys.stderr)
+    return segments, "local"
 
 
 if __name__ == "__main__":

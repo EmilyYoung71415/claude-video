@@ -23,12 +23,12 @@ Work the frontier: any ticket whose blockers are all done. For this chain, work 
 
 **Blocked by:** 接入本地转录开关.
 
-- [ ] Local audio extraction uses a predictable low-resource format.
-- [ ] Long media is split into ordered chunks.
-- [ ] Chunk length is configurable with a conservative default.
-- [ ] Only one local transcription process runs at a time.
-- [ ] Chunk timestamps are shifted back to source-video time.
-- [ ] Tests use a fake local transcription command.
+- [x] Local audio extraction uses a predictable low-resource format.
+- [x] Long media is split into ordered chunks.
+- [x] Chunk length is configurable with a conservative default.
+- [x] Only one local transcription process runs at a time.
+- [x] Chunk timestamps are shifted back to source-video time.
+- [x] Tests use a fake local transcription command.
 
 ## 加入进度保存和失败恢复
 
