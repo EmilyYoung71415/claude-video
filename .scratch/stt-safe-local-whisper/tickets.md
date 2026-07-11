@@ -59,11 +59,11 @@ Work the frontier: any ticket whose blockers are all done. For this chain, work 
 
 **Blocked by:** 加入缓存复用.
 
-- [ ] Raw timestamped data is written as the source of truth.
-- [ ] SRT output is generated from the raw transcript.
-- [ ] Readable Markdown output is generated separately from raw timing data.
-- [ ] Artifact names and locations are stable within the working output.
-- [ ] Tests verify the artifacts from deterministic fake transcript data.
+- [x] Raw timestamped data is written as the source of truth.
+- [x] SRT output is generated from the raw transcript.
+- [x] Readable Markdown output is generated separately from raw timing data.
+- [x] Artifact names and locations are stable within the working output.
+- [x] Tests verify the artifacts from deterministic fake transcript data.
 
 ## 把本地转录完整接入 `/watch` 报告
 
