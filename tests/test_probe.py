@@ -52,6 +52,25 @@ def test_playlist_supports_empty_and_partially_unavailable_entries(monkeypatch):
     assert partial["warnings"][0]["kind"] == "partial_unavailable"
 
 
+def test_playlist_marks_explicitly_unavailable_entries(monkeypatch):
+    result = run(monkeypatch, {"id": "PL1", "title": "List", "entries": [
+        {"id": "v1", "title": "Private", "availability": "needs_auth"},
+        {"id": "v2", "title": "Public", "availability": "public"},
+    ]}, "https://www.youtube.com/playlist?list=PL1")
+
+    assert result["entries"][0]["available"] is False
+    assert result["entries"][1]["available"] is True
+    assert result["warnings"][0]["kind"] == "partial_unavailable"
+
+
+def test_playlist_without_entries_is_still_a_playlist(monkeypatch):
+    result = run(monkeypatch, {"id": "PL1", "title": "List"},
+                 "https://www.youtube.com/playlist?list=PL1")
+
+    assert result["sourceType"] == "playlist"
+    assert result["canonicalUrl"] == "https://www.youtube.com/playlist?list=PL1"
+
+
 def test_single_video_reports_caption_availability(monkeypatch):
     result = run(monkeypatch, {"id": "v1", "title": "Video", "webpage_url": "https://youtu.be/v1",
                                "automatic_captions": {}}, "https://www.youtube.com/watch?v=v1")
@@ -63,10 +82,25 @@ def test_single_video_reports_caption_availability(monkeypatch):
     ("Private video. Sign in", "authentication_required"),
     ("Video unavailable", "not_found"),
     ("not available in your country", "region_restricted"),
-    ("HTTP Error 429: Too Many Requests", "rate_limited"),
+    ("Sign in to confirm you are not a bot. HTTP Error 429: Too Many Requests", "rate_limited"),
     ("Unable to extract player data", "format_changed"),
 ])
 def test_structured_failures(monkeypatch, stderr, kind):
     result = run(monkeypatch, None, "https://www.youtube.com/watch?v=v1", stderr=stderr, returncode=1)
     assert result["status"] == "error"
     assert result["error"]["kind"] == kind
+
+
+def test_json_null_result_returns_structured_failure(monkeypatch):
+    monkeypatch.setattr(probe.shutil, "which", lambda _: "/usr/bin/yt-dlp")
+    result = Result()
+    result.stdout = "null"
+    monkeypatch.setattr(probe.subprocess, "run", lambda command, **kwargs: result)
+
+    value = probe.probe("https://www.youtube.com/watch?v=v1")
+
+    assert value == {
+        "schemaVersion": 1,
+        "status": "error",
+        "error": {"kind": "format_changed", "message": "yt-dlp returned an unexpected JSON value"},
+    }

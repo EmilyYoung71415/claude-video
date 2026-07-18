@@ -27,6 +27,8 @@ def probe(source: str) -> dict[str, Any]:
         raw = json.loads(result.stdout)
     except json.JSONDecodeError:
         return failure("format_changed", "yt-dlp returned invalid JSON")
+    if not isinstance(raw, dict):
+        return failure("format_changed", "yt-dlp returned an unexpected JSON value")
     normalized = normalize(raw, source)
     if result.returncode != 0:
         normalized["warnings"].append({"kind": classify_error(result.stderr), "message": clean_message(result.stderr, result.returncode)})
@@ -47,12 +49,16 @@ def normalize(raw: dict[str, Any], source: str) -> dict[str, Any]:
                 unavailable += 1
                 continue
             video_id = str(entry["id"])
+            availability = entry.get("availability")
+            available = availability is None or availability in {"public", "unlisted"}
+            if not available:
+                unavailable += 1
             entries.append({
                 "id": video_id,
                 "url": entry_url(entry, video_id),
                 "title": entry.get("title") or "(unavailable title)",
                 "publishedAt": upload_date(entry),
-                "available": entry.get("availability") not in {"private", "subscriber_only", "premium_only"},
+                "available": available,
             })
     elif platform_id:
         entries.append({
@@ -75,10 +81,19 @@ def normalize(raw: dict[str, Any], source: str) -> dict[str, Any]:
 def identify_type(raw: dict[str, Any], source: str, is_collection: bool) -> str:
     parsed = urlparse(source)
     query = parse_qs(parsed.query)
-    if not is_collection or parsed.hostname == "youtu.be" or parsed.path == "/watch":
-        return "video"
     if "list" in query or "/playlist" in parsed.path:
         return "playlist"
+    if parsed.hostname == "youtu.be" or parsed.path == "/watch" or parsed.path.startswith("/shorts/"):
+        return "video"
+    if any(parsed.path.startswith(prefix) for prefix in ("/@", "/channel/", "/c/", "/user/")):
+        return "channel"
+    if not is_collection:
+        raw_id = str(raw.get("id") or "")
+        if raw_id.startswith("PL"):
+            return "playlist"
+        if raw_id.startswith("UC"):
+            return "channel"
+        return "video"
     return "channel"
 
 
@@ -123,12 +138,12 @@ def entry_url(entry: dict[str, Any], video_id: str) -> str:
 
 def classify_error(stderr: str) -> str:
     text = stderr.lower()
+    if any(term in text for term in ("too many requests", "http error 429", "rate limit")):
+        return "rate_limited"
     if any(term in text for term in ("private video", "sign in", "login", "cookies")):
         return "authentication_required"
     if any(term in text for term in ("not available in your country", "geo-restricted", "region")):
         return "region_restricted"
-    if any(term in text for term in ("too many requests", "http error 429", "rate limit")):
-        return "rate_limited"
     if any(term in text for term in ("video unavailable", "has been removed", "deleted")):
         return "not_found"
     if any(term in text for term in ("unsupported url", "unable to extract", "extractor")):

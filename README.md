@@ -213,6 +213,7 @@ Other knobs (passed to `scripts/watch.py`):
 │   ├── SKILL.md                  # skill contract — the source of truth across all surfaces
 │   └── scripts/
 │       ├── watch.py              # entry point — orchestrates download → frames → transcript
+│       ├── probe.py              # machine-readable YouTube source discovery without media download
 │       ├── download.py           # yt-dlp wrapper
 │       ├── frames.py             # ffmpeg frame extraction + auto-fps logic
 │       ├── transcribe.py         # VTT parsing + dedupe + Whisper orchestration
@@ -228,6 +229,16 @@ Other knobs (passed to `scripts/watch.py`):
 ├── tests/                        # pytest suite (ffmpeg-synthesized clips, no network)
 └── .github/workflows/            # release.yml — auto-builds watch.skill on tag push
 ```
+
+### Machine-readable YouTube source discovery
+
+Capture workflows can inspect a YouTube channel, playlist, or single-video URL without downloading media:
+
+```bash
+python3 skills/watch/scripts/probe.py "https://www.youtube.com/@example/videos"
+```
+
+The command prints a versioned JSON contract with source identity, canonical URL, title, video entries, publication times, caption availability, and (when verified) the channel's official feed URL. Errors are returned as JSON with a stable `error.kind`, so downstream code does not need to parse yt-dlp's human-facing text. A non-object JSON result such as `null` is treated as an extractor-format error rather than a process crash.
 
 ## Develop
 
