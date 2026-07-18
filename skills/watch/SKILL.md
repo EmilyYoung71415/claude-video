@@ -235,7 +235,7 @@ Behavior:
 
 ## Transcription
 
-The script gets a timestamped transcript in one of three ways:
+The script gets a timestamped transcript in one of four ways:
 
 1. **External transcript (free, highest priority).** If `--transcript path/to/file.srt` or `--transcript path/to/file.vtt` is provided, parse that file first. It overrides platform captions and Whisper, supports `--start` / `--end` filtering, and does not upload audio.
 2. **Native captions (free).** yt-dlp pulls manual or auto-generated subtitles from the source platform if available.
