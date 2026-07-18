@@ -16,6 +16,8 @@ import json
 import math
 import mimetypes
 import os
+import re
+import shlex
 import shutil
 import ssl
 import subprocess
@@ -38,6 +40,8 @@ LOCAL_BIN_ENV = "WATCH_LOCAL_WHISPER_BIN"
 LOCAL_MODEL_ENV = "WATCH_LOCAL_WHISPER_MODEL"
 LOCAL_CHUNK_SECONDS_ENV = "WATCH_LOCAL_WHISPER_CHUNK_SECONDS"
 LOCAL_CACHE_DIR_ENV = "WATCH_LOCAL_WHISPER_CACHE_DIR"
+LOCAL_ARGS_ENV = "WATCH_LOCAL_WHISPER_ARGS"
+TRANSCRIPT_LANGUAGE_ENV = "WATCH_TRANSCRIPT_LANGUAGE"
 DEFAULT_LOCAL_CHUNK_SECONDS = 600.0
 MIN_LOCAL_CHUNK_SECONDS = 0.25
 
@@ -159,7 +163,18 @@ def local_cache_root() -> Path:
     return (CONFIG_FILE.parent / "cache" / "local-whisper").expanduser().resolve()
 
 
-def local_cache_key(video_path: str | Path, status: dict, chunk_seconds: float) -> str:
+def local_whisper_args() -> list[str]:
+    """Return extra user-configured arguments for whisper.cpp."""
+    raw = _config_value(LOCAL_ARGS_ENV)
+    if not raw:
+        return []
+    try:
+        return shlex.split(raw)
+    except ValueError as exc:
+        raise SystemExit(f"{LOCAL_ARGS_ENV} is invalid: {exc}") from exc
+
+
+def local_cache_key(video_path: str | Path, status: dict, chunk_seconds: float, language: str | None = None) -> str:
     """Build a cache key from the input file and local transcription settings."""
     path = Path(video_path).expanduser().resolve()
     try:
@@ -176,6 +191,8 @@ def local_cache_key(video_path: str | Path, status: dict, chunk_seconds: float) 
         "binary": str(status.get("binary") or ""),
         "model": str(status.get("model") or ""),
         "chunk_seconds": chunk_seconds,
+        "args": local_whisper_args(),
+        "language": language or _config_value(TRANSCRIPT_LANGUAGE_ENV) or "auto",
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:24]
@@ -672,8 +689,22 @@ def parse_local_whisper_json(path: Path) -> list[dict]:
     return out
 
 
+def _looks_like_gpu_allocation_failure(output: str) -> bool:
+    lowered = output.lower()
+    return (
+        ("metal" in lowered or "gpu" in lowered)
+        and ("allocate" in lowered or "allocation" in lowered)
+    )
+
+
+def _local_args_disable_gpu(args: list[str]) -> bool:
+    return "-ng" in args or "--no-gpu" in args
+
+
 def _run_local_whisper(audio_path: Path, out_prefix: Path, status: dict) -> list[dict]:
     """Run one local whisper.cpp-compatible transcription command."""
+    extra_args = local_whisper_args()
+    language = status.get("language")
     cmd = [
         str(status["binary"]),
         "-m", str(status["model"]),
@@ -681,9 +712,22 @@ def _run_local_whisper(audio_path: Path, out_prefix: Path, status: dict) -> list
         "-of", str(out_prefix.resolve()),
         "-oj",
     ]
+    if language:
+        cmd.extend(["-l", str(language)])
+    cmd.extend(extra_args)
     result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
+    detail = (result.stderr or result.stdout).strip()
+    if (
+        result.returncode != 0
+        and not _local_args_disable_gpu(extra_args)
+        and _looks_like_gpu_allocation_failure(detail)
+    ):
+        retry = [*cmd, "-ng"]
+        status["device"] = "cpu"
+        print("[watch] local Whisper GPU failed; retrying CPU-only with -ng", file=sys.stderr)
+        result = subprocess.run(retry, capture_output=True, text=True)
         detail = (result.stderr or result.stdout).strip()
+    if result.returncode != 0:
         raise SystemExit(f"local Whisper command failed: {detail}")
     json_path = out_prefix.with_suffix(".json")
     if not json_path.exists():
@@ -900,6 +944,7 @@ def transcribe_video(
 def transcribe_video_local(
     video_path: str | Path,
     audio_out: Path,
+    language: str | None = None,
 ) -> tuple[list[dict], str]:
     """Run local whisper.cpp transcription one chunk at a time."""
     status = local_whisper_status()
@@ -908,7 +953,10 @@ def transcribe_video_local(
 
     print("[watch] extracting audio for local Whisper…", file=sys.stderr)
     chunk_seconds = local_chunk_seconds()
-    cache_key = local_cache_key(video_path, status, chunk_seconds)
+    language = language or _config_value(TRANSCRIPT_LANGUAGE_ENV)
+    status["language"] = language or "auto"
+    status["device"] = "auto"
+    cache_key = local_cache_key(video_path, status, chunk_seconds, language)
     cache_dir = local_cache_root() / cache_key
     cache_dir.mkdir(parents=True, exist_ok=True)
     audio_path = cache_dir / "audio.wav"
@@ -951,7 +999,28 @@ def transcribe_video_local(
     _write_local_manifest(manifest_path, manifest)
     print(f"[watch] local transcript artifacts: {cache_dir / 'artifacts'}", file=sys.stderr)
     print(f"[watch] transcribed {len(segments)} segments via local Whisper", file=sys.stderr)
+    # Keep the stable backend identifier for callers; device/fallback details
+    # are emitted in diagnostics and the structured report.
     return segments, "local"
+
+
+def assess_transcript_quality(segments: list[dict], language: str | None = None) -> list[dict]:
+    """Return machine-readable warnings for obvious ASR failures."""
+    text = " ".join(str(s.get("text") or "").strip() for s in segments).strip()
+    warnings: list[dict] = []
+    if not text:
+        return [{"code": "empty_transcript", "severity": "high", "message": "转写没有产生文本"}]
+    if language and language.lower().startswith("zh"):
+        cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+        letters = sum(1 for ch in text if ch.isalpha())
+        if letters >= 20 and cjk / max(letters, 1) < 0.15:
+            warnings.append({"code": "language_mismatch", "severity": "high", "message": "指定中文，但文本主要不是中文字符"})
+    words = [w.lower() for w in re.findall(r"[A-Za-z]+|[\u4e00-\u9fff]{2,}", text)]
+    if len(words) >= 12:
+        repeated = sum(a == b for a, b in zip(words, words[1:])) / max(1, len(words) - 1)
+        if repeated >= 0.35:
+            warnings.append({"code": "abnormal_repetition", "severity": "high", "message": f"连续词重复比例异常 ({repeated:.0%})"})
+    return warnings
 
 
 if __name__ == "__main__":

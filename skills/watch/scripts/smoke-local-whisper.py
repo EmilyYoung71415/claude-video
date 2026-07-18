@@ -14,6 +14,8 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 WATCH = SCRIPT_DIR / "watch.py"
+sys.path.insert(0, str(SCRIPT_DIR))
+from config import read_env_file  # noqa: E402
 
 
 def _run(cmd: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
@@ -66,26 +68,39 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="watch-local-smoke-") as tmp:
         work = Path(tmp)
-        clip = work / "clip.mp4"
-        _make_clip(clip)
-
         env = dict(os.environ)
         env["WATCH_LOCAL_WHISPER_CACHE_DIR"] = str(work / "cache")
         env["WATCH_LOCAL_WHISPER_CHUNK_SECONDS"] = "10"
 
         expected_text = "local smoke transcript"
         if not args.real:
+            clip = work / "clip.mp4"
+            _make_clip(clip)
             fake = work / "fake_whisper.py"
             model = work / "model.bin"
             _make_fake_whisper(fake)
             model.write_text("model", encoding="utf-8")
             env["WATCH_LOCAL_WHISPER_BIN"] = str(fake)
             env["WATCH_LOCAL_WHISPER_MODEL"] = str(model)
-        elif not env.get("WATCH_LOCAL_WHISPER_BIN") or not env.get("WATCH_LOCAL_WHISPER_MODEL"):
+        else:
+            file_values = read_env_file()
+            for key in (
+                "WATCH_LOCAL_WHISPER_BIN",
+                "WATCH_LOCAL_WHISPER_MODEL",
+                "WATCH_LOCAL_WHISPER_ARGS",
+            ):
+                if not env.get(key) and file_values.get(key):
+                    env[key] = file_values[key]
+            env.setdefault("WATCH_LOCAL_WHISPER_ARGS", "-ng")
+            sample = Path(env.get("WATCH_LOCAL_WHISPER_BIN", "")).resolve().parents[2] / "samples" / "jfk.wav"
+            if not sample.exists():
+                raise SystemExit(f"real smoke sample not found: {sample}")
+            clip = sample
+        if args.real and (not env.get("WATCH_LOCAL_WHISPER_BIN") or not env.get("WATCH_LOCAL_WHISPER_MODEL")):
             raise SystemExit(
                 "--real requires WATCH_LOCAL_WHISPER_BIN and WATCH_LOCAL_WHISPER_MODEL"
             )
-        else:
+        if args.real:
             expected_text = ""
 
         result = _run([
