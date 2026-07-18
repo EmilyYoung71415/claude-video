@@ -17,4 +17,3 @@ Create a new file under `.scratch/<feature-slug>/`, creating the directory if ne
 ## When a skill says "fetch the relevant ticket"
 
 Read the file at the referenced path. The user will normally pass the path or the issue number directly.
-

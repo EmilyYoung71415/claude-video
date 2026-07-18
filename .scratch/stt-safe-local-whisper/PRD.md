@@ -160,4 +160,3 @@ The recommended implementation order is:
 3. Add raw, SRT, and Markdown artifact output.
 4. Wire the backend into `/watch` with explicit selection and safe defaults.
 5. Add fake-command tests, then run one real local verification.
-

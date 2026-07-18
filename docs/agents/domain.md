@@ -21,4 +21,3 @@ When output names a domain concept, use the term as defined in `CONTEXT.md` when
 ## Flag ADR conflicts
 
 If output contradicts an existing ADR, surface it explicitly rather than silently overriding.
-
