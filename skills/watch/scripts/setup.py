@@ -56,6 +56,16 @@ OPENAI_API_KEY=
 # Allowed values: transcript | efficient | balanced | token-burner
 # Keep the value on its own line with no trailing comment.
 # WATCH_DETAIL=balanced
+
+# Optional local whisper.cpp backend. Use with: --whisper local
+# WATCH_LOCAL_WHISPER_BIN=/path/to/whisper-cli
+# WATCH_LOCAL_WHISPER_MODEL=/path/to/ggml-model.bin
+# WATCH_LOCAL_WHISPER_CHUNK_SECONDS=600
+# WATCH_LOCAL_WHISPER_ARGS=-ng
+# WATCH_LOCAL_WHISPER_CACHE_DIR=~/.config/watch/cache/local-whisper
+
+# Optional language hint. For Mandarin use `WATCH_TRANSCRIPT_LANGUAGE=zh`.
+# WATCH_TRANSCRIPT_LANGUAGE=zh
 """
 
 
@@ -229,8 +239,17 @@ def _status() -> dict:
     missing = _check_binaries()
     has_key, backend = _have_api_key()
     setup_complete = not is_first_run()
+    local_status: dict = {"configured": False, "binary": "", "model": "", "problems": []}
+    try:
+        from whisper import local_whisper_status
+        local_status = local_whisper_status()
+    except Exception as exc:
+        local_status["problems"] = [f"local Whisper status unavailable: {exc}"]
 
-    if not missing and has_key:
+    if local_status.get("configured"):
+        backend = "local"
+
+    if not missing and (has_key or local_status.get("configured")):
         status = "ready"
     elif missing and not has_key:
         status = "needs_install_and_key"
@@ -239,7 +258,7 @@ def _status() -> dict:
     else:
         status = "needs_key"
 
-    can_proceed = (not missing) and (has_key or setup_complete)
+    can_proceed = (not missing) and (has_key or local_status.get("configured") or setup_complete)
 
     cfg = get_config()
     return {
@@ -250,6 +269,7 @@ def _status() -> dict:
         "missing_binaries": missing,
         "whisper_backend": backend,
         "has_api_key": has_key,
+        "local_whisper": local_status,
         "config_file": str(CONFIG_FILE),
         "watch_detail": cfg["detail"],
         "platform": platform.system(),

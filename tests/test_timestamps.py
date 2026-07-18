@@ -57,6 +57,13 @@ def test_extract_at_timestamps_one_frame_per_point(cut_clip: Path, tmp_path: Pat
     assert len(out) == len(list((tmp_path / "f").glob("cue_*.jpg")))
 
 
+def test_extract_at_timestamps_supports_adjacent_window(cut_clip: Path, tmp_path: Path):
+    out, meta = frames.extract_at_timestamps(str(cut_clip), tmp_path / "f", [2.0], window_seconds=0.5)
+    assert [f["timestamp_seconds"] for f in out] == [1.5, 2.0, 2.5]
+    assert all(f["reason"] == "transcript-cue-window" for f in out)
+    assert meta["window_seconds"] == 0.5
+
+
 def test_extract_at_timestamps_drops_out_of_window(cut_clip: Path, tmp_path: Path):
     out, meta = frames.extract_at_timestamps(
         str(cut_clip), tmp_path / "f", [0.5, 2.0, 4.0],

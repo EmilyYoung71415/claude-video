@@ -29,6 +29,16 @@ def test_get_config_keys(monkeypatch, tmp_path):
     assert set(cfg) == {"detail", "config_file"}
 
 
+def test_read_env_file_expands_home_variables(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    env_file = tmp_path / ".env"
+    env_file.write_text("WATCH_LOCAL_WHISPER_BIN=$HOME/tools/whisper-cli\n", encoding="utf-8")
+
+    values = config.read_env_file(env_file)
+
+    assert values["WATCH_LOCAL_WHISPER_BIN"] == str(tmp_path / "tools" / "whisper-cli")
+
+
 def test_frame_cap_mapping():
     assert config.frame_cap("efficient") == 50
     assert config.frame_cap("balanced") == 100

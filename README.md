@@ -28,6 +28,14 @@ With Claude Video `/watch` you can paste a URL or a local path, ask a question, 
 /watch https://youtu.be/dQw4w9WgXcQ what happens at the 30 second mark?
 ```
 
+You can also ask naturally in hosts that route Agent Skills automatically:
+
+```
+Summarize what this YouTube video is about: https://www.youtube.com/watch?v=xxxx
+```
+
+When a message contains a video URL or local video path and asks to summarize, explain, analyze, extract key points, find a timestamp, diagnose a screen recording, or answer questions about the video, the host should route it to `/watch`. The explicit `/watch ...` form is still the most portable invocation across hosts.
+
 ## What people actually use it for
 
 **Analyze someone else's content.** `/watch https://youtu.be/<viral-video> what hook did they open with?` Claude looks at the first frames, reads the opening transcript, breaks down the structure. Same for ad creative, competitor launches, podcast intros, anything where the *how* matters as much as the *what*.
@@ -170,6 +178,7 @@ Captions cover the majority of public videos for free. The Whisper fallback only
 | Download + native captions | `yt-dlp` + `ffmpeg` | Free |
 | Whisper fallback (preferred) | [Groq API key](https://console.groq.com/keys) — `whisper-large-v3` | Cheap, fast |
 | Whisper fallback (alt) | [OpenAI API key](https://platform.openai.com/api-keys) — `whisper-1` | Standard pricing |
+| External transcript | `.srt` or `.vtt` file from MacWhisper Pro or another local tool | Free, no audio upload |
 | Disable Whisper entirely | `--no-whisper` | Free, frames-only when no captions |
 
 ## Usage
@@ -179,6 +188,21 @@ Captions cover the majority of public videos for free. The Whisper fallback only
 /watch https://www.tiktok.com/@user/video/123 summarize this
 /watch ~/Movies/screen-recording.mp4 when does the UI break?
 /watch https://vimeo.com/123 what tools does she mention?
+/watch ./video.mp4 --transcript ./video.srt summarize this
+/watch https://youtu.be/abc --transcript ./manual.vtt --detail balanced
+```
+
+Common transcript-first flows:
+
+```bash
+# Use native captions when present; if captions are missing, use local whisper.cpp.
+/watch https://www.youtube.com/watch?v=xxxx --detail transcript --whisper local summarize this
+
+# If the URL has no captions, allow the audio download after the user approves it.
+/watch https://www.youtube.com/watch?v=xxxx --detail transcript --whisper local --allow-download summarize this
+
+# Use a transcript you already have, without downloading or uploading audio.
+/watch https://www.youtube.com/watch?v=xxxx --transcript ./video.srt summarize this
 ```
 
 Focused on a specific section — denser frame budget, lower token cost:
@@ -191,19 +215,100 @@ Focused on a specific section — denser frame budget, lower token cost:
 Other knobs (passed to `scripts/watch.py`):
 
 - `--detail transcript|efficient|balanced|token-burner` — fidelity/speed dial. `transcript` skips frames (transcript only); `efficient` uses fast keyframes (cap 50); `balanced` uses scene-aware frames (cap 100); `token-burner` is scene-aware and uncapped.
+- `--allow-download` — allow downloading URL audio when captions are missing. For YouTube URLs with no captions, `/watch` always asks for user permission before downloading; re-run with `--allow-download --out-dir download` after approval.
 - `--timestamps T1,T2,…` — grab a frame at each absolute timestamp (`SS`/`MM:SS`/`HH:MM:SS`). Claude reads the transcript first, then targets the moments the presenter flags ("look here", "as you can see"). Added on top of the detail frames (reserved against the cap); out-of-window cues are dropped in focus mode; with `--detail transcript` these become the only frames.
 - `--max-frames N` — lower the frame cap for a tighter token budget.
 - `--resolution W` — bump frame width to 1024 px when Claude needs to read on-screen text (slides, terminals, code).
 - `--fps F` — override the auto-fps calculation (still capped at 2 fps).
-- `--whisper groq|openai` — force a specific Whisper backend.
+- `--transcript PATH` — use an external `.srt` or `.vtt` transcript before platform captions or Whisper. External transcripts are useful with MacWhisper Pro or other local transcription tools, and they avoid uploading audio to Groq/OpenAI.
+- `--whisper local|groq|openai` — force a specific Whisper backend.
 - `--no-whisper` — disable transcription entirely; frames only.
 - `--no-dedup` — keep near-duplicate frames. By default a frame-delta pass drops frames that are visually near-identical to the one before them (held slides, static screen recordings, paused video), so the frame budget is spent on distinct content; this flag turns that off.
 - `--out-dir DIR` — keep working files somewhere specific (default: auto-generated tmp dir).
+
+## Exposed capabilities
+
+`/watch` exposes these capabilities to an agent:
+
+- **Video Q&A from a URL or local file.** Supports YouTube and anything else `yt-dlp` can read, plus local `.mp4`, `.mov`, `.mkv`, `.webm`, and audio/video-like files.
+- **Transcript-first summaries.** `--detail transcript` skips frames when text is enough, which is the cheapest path for long YouTube summaries.
+- **Native captions first.** Captions are used before any audio download or Whisper fallback.
+- **External subtitle input.** `--transcript ./file.srt` or `--transcript ./file.vtt` lets you bring captions from MacWhisper Pro, YouTube Studio, another transcription tool, or a manually edited file.
+- **Whisper API fallback.** Groq and OpenAI compatible endpoints are supported, including custom base URLs for gateways and proxies.
+- **Local whisper.cpp fallback.** `--whisper local` runs a local `whisper-cli` binary with a local model, splits long audio into chunks, resumes completed chunks, and writes reusable transcript artifacts.
+- **Permissioned URL downloads.** If a YouTube URL has no captions and audio/video must be downloaded, the agent should ask the user first, then re-run with `--allow-download`.
+
+## Routing rules for agents
+
+Route a user request to `/watch` when the request includes a video URL or local media path and asks for any video-grounded work: summarize, explain, list key points, answer questions, inspect visuals, find moments, compare claims, diagnose a screen recording, or produce notes.
+
+Prefer these defaults:
+
+- Use `--detail transcript` for "summarize this YouTube video" unless the user asks about visuals, slides, UI, charts, gestures, or a specific on-screen moment.
+- Use native captions first. Do not download URL audio/video when captions are enough.
+- If captions are missing and `--whisper local` or an API key is configured, ask for permission before downloading URL audio, then re-run with `--allow-download`.
+- If the user provides `.srt` or `.vtt`, pass it with `--transcript` and do not use Whisper unless the transcript is unusable.
+- Use `--whisper local` when the user has configured local whisper.cpp or explicitly asks to avoid cloud transcription.
+
+Examples:
+
+```text
+User: Summarize https://www.youtube.com/watch?v=xxxx
+Route: /watch https://www.youtube.com/watch?v=xxxx --detail transcript summarize this
+
+User: Summarize this caption-less YouTube video with my local Whisper.
+Route after permission: /watch <url> --detail transcript --whisper local --allow-download summarize this
+
+User: Use this subtitle file and explain the talk.
+Route: /watch <url-or-file> --transcript ./talk.srt explain the talk
+```
 
 ## Limits
 
 - **Long-video accuracy depends on the detail mode.** On the capped modes (`efficient`, default `balanced`) coverage thins out past ~10 minutes — the frame cap spreads across the whole clip, so the script prints a "sparse scan" warning and you're better off re-running focused with `--start`/`--end`. `token-burner` lifts the cap and keeps *every* scene-change frame across the full video, so it stays complete on longer clips at the cost of more image tokens. The 10-minute mark is guidance for the capped modes, not a hard ceiling.
 - **Detail is one dial.** Defaults are balanced: scene-aware frames, 2 fps max, 100-frame cap. Use `--detail efficient` for a fast 50-frame keyframe pass, or `--detail token-burner` for uncapped scene candidates. Set `WATCH_DETAIL` in `~/.config/watch/.env` to change the default.
+
+## Transcription
+
+The script gets a timestamped transcript in one of four ways:
+
+1. **External transcript (free, highest priority).** Pass `--transcript ./video.srt` or `--transcript ./video.vtt` to use a local subtitle file. This takes precedence over platform captions and Whisper, supports `--start` / `--end` filtering, and does not upload audio.
+2. **Native captions (free).** yt-dlp pulls manual or auto-generated subtitles from the source platform if available.
+3. **Whisper API fallback.** If no external transcript or captions came back (or the source is a local file), the script extracts audio (`ffmpeg -vn -ac 1 -ar 16000 -b:a 64k`, ~0.5 MB/min) and uploads it to whichever Whisper API has a key configured.
+4. **Local Whisper fallback.** Pass `--whisper local` to use a local whisper.cpp-compatible command instead of uploading audio. The script extracts mono 16 kHz audio, splits it into conservative chunks, runs one local command at a time, resumes completed chunks from a manifest, and writes `transcript.json`, `transcript.srt`, and `transcript.md` artifacts in the local cache.
+
+API keys and local Whisper settings live in `~/.config/watch/.env`. The script prefers Groq when both API keys are set; override with `--whisper openai` to force OpenAI or `--whisper local` to force local transcription. Use `--no-whisper` to skip the fallback entirely.
+
+Local Whisper configuration:
+
+```text
+WATCH_LOCAL_WHISPER_BIN=/path/to/whisper-cli
+WATCH_LOCAL_WHISPER_MODEL=/path/to/ggml-model.bin
+WATCH_LOCAL_WHISPER_CHUNK_SECONDS=600
+WATCH_LOCAL_WHISPER_CACHE_DIR=~/.config/watch/cache/local-whisper
+WATCH_LOCAL_WHISPER_ARGS=-ng
+```
+
+The local command is invoked with `-m <model> -f <chunk.wav> -of <output-prefix> -oj`, matching whisper.cpp's JSON output mode. `WATCH_LOCAL_WHISPER_CHUNK_SECONDS` defaults to 600 seconds. `WATCH_LOCAL_WHISPER_ARGS` is appended to every local command; `-ng` disables GPU/Metal and is useful on Macs where whisper.cpp's Metal backend cannot allocate memory. The cache key includes the input file identity, local executable, model path, chunk size, and local args, so changing those settings avoids stale reuse.
+
+Smoke verification:
+
+```bash
+python3 skills/watch/scripts/smoke-local-whisper.py          # fake local command, fast
+python3 skills/watch/scripts/smoke-local-whisper.py --real   # requires WATCH_LOCAL_WHISPER_BIN and WATCH_LOCAL_WHISPER_MODEL
+```
+
+Whisper-compatible gateways can be configured in the environment, `~/.config/watch/.env`, or the current directory's `.env`:
+
+```text
+WATCH_GROQ_BASE_URL=https://api.groq.com/openai/v1
+WATCH_OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_BASE_URL=https://your-gateway.example.com/v1
+WATCH_GROQ_MODEL=whisper-large-v3
+WATCH_OPENAI_MODEL=whisper-1
+```
+
+OpenAI endpoint priority is `WATCH_OPENAI_BASE_URL`, then `OPENAI_BASE_URL`, then the official OpenAI URL. Groq uses `WATCH_GROQ_BASE_URL`, then the official Groq URL. The script appends `/audio/transcriptions` automatically.
 
 ## Structure
 

@@ -7,6 +7,8 @@ then Reads each frame path to see the video.
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -15,11 +17,16 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent.resolve()
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from config import frame_cap, get_config  # noqa: E402
+from config import frame_cap, get_config, read_env_file  # noqa: E402
 from download import download, fetch_captions, is_url  # noqa: E402
 from frames import MAX_FPS, auto_fps, auto_fps_focus, extract_at_timestamps, extract_keyframes, extract_scene_or_uniform, format_time, get_metadata, merge_frames, parse_time, parse_timestamps  # noqa: E402
-from transcribe import filter_range, format_transcript, parse_vtt  # noqa: E402
-from whisper import load_api_key, transcribe_video  # noqa: E402
+from transcribe import filter_range, format_transcript, parse_transcript_file, parse_vtt  # noqa: E402
+from whisper import assess_transcript_quality, load_api_key, local_whisper_setup_message, transcribe_video, transcribe_video_local, write_transcript_artifacts  # noqa: E402
+
+
+def _is_youtube_url(source: str) -> bool:
+    lowered = source.lower()
+    return "youtube.com/" in lowered or "youtu.be/" in lowered
 
 
 def main() -> int:
@@ -46,9 +53,28 @@ def main() -> int:
              "e.g. transcript-flagged 'look here' moments. Added on top of the detail frames "
              "(reserved against the cap); with --detail transcript these become the only frames.",
     )
+    ap.add_argument(
+        "--timestamp-window", type=float, default=0.0,
+        help="围绕每个 --timestamps 时间点取帧的半窗口秒数（例如 1.0 会取 -1/0/+1 秒）",
+    )
+    ap.add_argument(
+        "--language", default=None,
+        help="转写语言（例如 zh、en）；也可用 WATCH_TRANSCRIPT_LANGUAGE 持久配置",
+    )
+    ap.add_argument(
+        "--transcript",
+        type=str,
+        default=None,
+        help="Use an external .srt or .vtt transcript file before platform captions or Whisper.",
+    )
     ap.add_argument("--start", type=str, default=None, help="Range start (SS, MM:SS, or HH:MM:SS)")
     ap.add_argument("--end", type=str, default=None, help="Range end (SS, MM:SS, or HH:MM:SS)")
     ap.add_argument("--out-dir", type=str, default=None, help="Working directory (default: tmp)")
+    ap.add_argument(
+        "--allow-download",
+        action="store_true",
+        help="Allow downloading a URL video when captions are missing.",
+    )
     ap.add_argument(
         "--no-whisper",
         action="store_true",
@@ -56,7 +82,7 @@ def main() -> int:
     )
     ap.add_argument(
         "--whisper",
-        choices=["groq", "openai"],
+        choices=["local", "groq", "openai"],
         default=None,
         help="Force a specific Whisper backend. Default: prefer Groq, fall back to OpenAI.",
     )
@@ -79,6 +105,11 @@ def main() -> int:
         raise SystemExit("--max-frames must be greater than zero")
     budget_cap = max_frames if max_frames is not None else 100
     cue_timestamps = parse_timestamps(args.timestamps)
+    if args.timestamp_window < 0:
+        raise SystemExit("--timestamp-window must be non-negative")
+    language = args.language or os.environ.get("WATCH_TRANSCRIPT_LANGUAGE") or read_env_file().get("WATCH_TRANSCRIPT_LANGUAGE")
+    if language:
+        language = language.strip()
 
     if args.out_dir:
         work = Path(args.out_dir).expanduser().resolve()
@@ -94,7 +125,12 @@ def main() -> int:
     transcript_source: str | None = None
     video_path: str | None = None
 
-    if url_source:
+    if args.transcript:
+        transcript_segments = parse_transcript_file(args.transcript)
+        transcript_text = format_transcript(transcript_segments)
+        transcript_source = f"external transcript ({Path(args.transcript).name})"
+
+    if url_source and not args.transcript:
         print("[watch] checking metadata/captions via yt-dlp…", file=sys.stderr)
         dl = fetch_captions(args.source, work / "download")
         if dl.get("subtitle_path"):
@@ -105,11 +141,23 @@ def main() -> int:
             except Exception as exc:
                 print(f"[watch] subtitle parse failed: {exc}", file=sys.stderr)
                 transcript_segments = []
+        elif (
+            _is_youtube_url(args.source)
+            and not cue_timestamps
+            and not args.allow_download
+        ):
+            download_dir = Path.cwd() / "download"
+            raise SystemExit(
+                "This YouTube video has no captions. Ask the user for permission to "
+                f"download the audio, then re-run with `--allow-download --out-dir {download_dir}`."
+            )
 
     # --timestamps needs the video for frame grabs, so it overrides the
     # transcript-mode download skip (and forces a full, not audio-only, fetch).
+    # Local files are always resolved so the report can include file metadata
+    # even when an external transcript lets us skip frame/audio work.
     audio_only = detail == "transcript" and not cue_timestamps
-    if detail == "transcript" and transcript_segments and not cue_timestamps:
+    if detail == "transcript" and transcript_segments and not cue_timestamps and url_source:
         video_path = None
     else:
         if url_source:
@@ -184,6 +232,7 @@ def main() -> int:
             max_frames=max_frames,
             start_seconds=start_sec,
             end_seconds=end_sec,
+            window_seconds=args.timestamp_window,
         )
         if cue_meta.get("dropped_out_of_window"):
             print(
@@ -236,7 +285,29 @@ def main() -> int:
         except Exception as exc:
             print(f"[watch] subtitle parse failed: {exc}", file=sys.stderr)
 
-    if not transcript_segments and not args.no_whisper and video_path and meta.get("has_audio"):
+    if (
+        not transcript_segments
+        and not args.no_whisper
+        and video_path
+        and meta.get("has_audio")
+        and args.whisper == "local"
+    ):
+        setup_message = local_whisper_setup_message()
+        if setup_message:
+            print(f"[watch] local Whisper unavailable: {setup_message}", file=sys.stderr)
+        else:
+            try:
+                all_segments, used_backend = transcribe_video_local(
+                    video_path,
+                    work / "audio.mp3",
+                    language=language,
+                )
+                transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
+                transcript_text = format_transcript(transcript_segments)
+                transcript_source = f"whisper ({used_backend})"
+            except SystemExit as exc:
+                print(f"[watch] local Whisper failed: {exc}", file=sys.stderr)
+    elif not transcript_segments and not args.no_whisper and video_path and meta.get("has_audio"):
         backend, api_key = load_api_key(args.whisper)
         if backend and api_key:
             try:
@@ -266,6 +337,24 @@ def main() -> int:
         print("[watch] no audio stream found — proceeding without transcription", file=sys.stderr)
 
     info = dl.get("info") or {}
+    quality_warnings = assess_transcript_quality(transcript_segments, language)
+    if quality_warnings:
+        for warning in quality_warnings:
+            print(f"[watch] WARNING {warning['code']}: {warning['message']}", file=sys.stderr)
+    artifact_paths = write_transcript_artifacts(work / "artifacts", transcript_segments, source=transcript_source or "none")
+    report_path = work / "report.json"
+    report = {
+        "source": args.source,
+        "title": info.get("title") or (Path(args.source).name if not url_source else None),
+        "duration_seconds": full_duration,
+        "resolution": {"width": meta.get("width"), "height": meta.get("height")},
+        "transcript": {"source": transcript_source, "language": language or "auto", "segments": transcript_segments, "artifacts": artifact_paths},
+        "quality_warnings": quality_warnings,
+        "frames": frames,
+        "timestamp_window_seconds": args.timestamp_window,
+        "cache": {"work_dir": str(work)},
+    }
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print()
     print("# watch: video report")
@@ -285,6 +374,7 @@ def main() -> int:
         print(f"- **Resolution:** {meta['width']}x{meta['height']} ({meta.get('codec') or 'unknown codec'})")
     range_mode = "focused" if focused else "full"
     print(f"- **Detail:** {detail}")
+    print(f"- **Language:** {language or 'auto'}")
     detail_count = frame_meta.get("selected_count", 0)
     if detail != "transcript":
         cap_label = "unlimited" if detail_budget is None else str(detail_budget)
@@ -315,6 +405,9 @@ def main() -> int:
         )
     else:
         print("- **Transcript:** none available")
+    if quality_warnings:
+        print(f"- **Quality warnings:** {len(quality_warnings)} (see `{report_path}`)")
+    print(f"- **Structured output:** `{report_path}`")
 
     if detail == "token-burner" and len(frames) > 250:
         print()
