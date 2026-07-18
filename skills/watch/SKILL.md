@@ -273,6 +273,6 @@ Downstream capture workflows that need channel, playlist, or single-video identi
 python3 "${SKILL_DIR}/scripts/probe.py" "<youtube-url>"
 ```
 
-The command writes a versioned JSON object to stdout. Successful responses have `status: "ok"`, `sourceType` (`channel`, `playlist`, or `video`), `platformId`, `canonicalUrl`, `title`, `entries`, and optional `officialFeedUrl`. Each entry contains a stable video `id`, URL, title, optional `publishedAt`, and availability. Failed responses have `status: "error"` and an `error.kind` that distinguishes authentication, regional restriction, rate limiting, missing content, extractor changes, and general unavailability. A JSON `null` or other non-object response from `yt-dlp` is reported as a structured `format_changed` error.
+The command writes a versioned JSON object to stdout. Successful responses have `status: "ok"`, `sourceType` (`channel`, `playlist`, or `video`), `platformId`, `canonicalUrl`, `title`, `entries`, and optional `officialFeedUrl`. Each entry contains a stable video `id`, URL, title, optional `publishedAt`, and availability; single-video entries also report `captionsAvailable`. Failed responses have `status: "error"` and an `error.kind` that distinguishes authentication, regional restriction, rate limiting, missing content, extractor changes, and general unavailability. A JSON `null` or other non-object response from `yt-dlp` is reported as a structured `format_changed` error.
 
 Review scripts before first use to verify behavior.

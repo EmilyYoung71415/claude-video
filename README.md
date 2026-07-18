@@ -238,7 +238,7 @@ Capture workflows can inspect a YouTube channel, playlist, or single-video URL w
 python3 skills/watch/scripts/probe.py "https://www.youtube.com/@example/videos"
 ```
 
-The command prints a versioned JSON contract with source identity, canonical URL, title, video entries, publication times, caption availability, and (when verified) the channel's official feed URL. Errors are returned as JSON with a stable `error.kind`, so downstream code does not need to parse yt-dlp's human-facing text. A non-object JSON result such as `null` is treated as an extractor-format error rather than a process crash.
+The command prints a versioned JSON contract with source identity, canonical URL, title, video entries, publication times, single-video caption availability, and (when verified) the channel's official feed URL. Errors are returned as JSON with a stable `error.kind`, so downstream code does not need to parse yt-dlp's human-facing text. A non-object JSON result such as `null` is treated as an extractor-format error rather than a process crash.
 
 ## Develop
 
