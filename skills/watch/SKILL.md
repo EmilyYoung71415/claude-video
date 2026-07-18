@@ -263,6 +263,16 @@ If you already watched a video this session and the user asks a follow-up, do **
 - Does not log, cache, or write API keys to stdout, stderr, or output files
 - Does not persist anything outside the working directory and `~/.config/watch/.env` — clean up the working directory when you're done (Step 5)
 
-**Bundled scripts:** `scripts/watch.py` (entry point), `scripts/download.py` (yt-dlp wrapper), `scripts/frames.py` (ffmpeg frame extraction), `scripts/transcribe.py` (caption selection + Whisper orchestration), `scripts/whisper.py` (Groq / OpenAI clients), `scripts/setup.py` (preflight + installer)
+**Bundled scripts:** `scripts/watch.py` (entry point), `scripts/probe.py` (machine-readable YouTube source discovery), `scripts/download.py` (yt-dlp wrapper), `scripts/frames.py` (ffmpeg frame extraction), `scripts/transcribe.py` (caption selection + Whisper orchestration), `scripts/whisper.py` (Groq / OpenAI clients), `scripts/setup.py` (preflight + installer)
+
+### Structured YouTube source discovery
+
+Downstream capture workflows that need channel, playlist, or single-video identity can call the bundled probe without invoking `/watch` or downloading media:
+
+```bash
+python3 "${SKILL_DIR}/scripts/probe.py" "<youtube-url>"
+```
+
+The command writes a versioned JSON object to stdout. Successful responses have `status: "ok"`, `sourceType` (`channel`, `playlist`, or `video`), `platformId`, `canonicalUrl`, `title`, `entries`, and optional `officialFeedUrl`. Each entry contains a stable video `id`, URL, title, optional `publishedAt`, and availability; single-video entries also report `captionsAvailable`. Failed responses have `status: "error"` and an `error.kind` that distinguishes authentication, regional restriction, rate limiting, missing content, extractor changes, and general unavailability. A JSON `null` or other non-object response from `yt-dlp` is reported as a structured `format_changed` error.
 
 Review scripts before first use to verify behavior.
