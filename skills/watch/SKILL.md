@@ -141,7 +141,7 @@ python3 "${SKILL_DIR}/scripts/watch.py" "<source>"
 
 Optional flags:
 - `--detail transcript|efficient|balanced|token-burner` — fidelity/speed dial. `transcript` = no frames (transcript only, skips video download when captions exist); `efficient` = fast keyframes (cap 50); `balanced` = scene-aware frames (cap 100); `token-burner` = scene-aware, uncapped.
-- `--allow-download` — allow downloading URL audio when captions are missing. If a YouTube URL has no captions and no configured transcription backend, the script stops and tells you to ask the user before re-running with this flag.
+- `--allow-download` — allow downloading URL audio when captions are missing. The script always stops and asks for permission before downloading a YouTube URL without captions.
 - `--start T` / `--end T` — focus on a section. Accepts `SS`, `MM:SS`, or `HH:MM:SS`. When either is set, fps auto-scales denser (see "Focusing on a section" below).
 - `--timestamps T1,T2,…` — grab a frame at each of these absolute timestamps (`SS`, `MM:SS`, or `HH:MM:SS`). Use this after reading the transcript to capture deictic moments the presenter flags ("look here", "as you can see", "notice this") that visual selection alone may miss. See "Transcript-cue frames" below.
 - `--transcript PATH` — use an external `.srt` or `.vtt` transcript before platform captions or Whisper. Use this when the user provides subtitles from MacWhisper Pro or another local transcription tool. External transcripts do not upload audio to Groq/OpenAI.
@@ -207,7 +207,7 @@ Default behavior comes from `~/.config/watch/.env`:
 
 At `transcript` detail, captions are enough to return a report without downloading video. If captions are missing, the script downloads audio only and tries Whisper. If no transcript can be produced, it reports the limitation clearly; re-run with `--detail balanced` for frames.
 
-For YouTube URLs, if captions are missing and there is no configured transcription backend (no API key and no local Whisper), the script refuses to download by default. Ask the user for permission to download the audio. If they agree, re-run with:
+For YouTube URLs, if captions are missing, the script refuses to download by default even when a transcription backend is configured. Ask the user for permission to download the audio. If they agree, re-run with:
 
 ```bash
 python3 "${SKILL_DIR}/scripts/watch.py" "<youtube-url>" --allow-download --out-dir download
@@ -253,9 +253,7 @@ Both API keys and local Whisper settings live in `~/.config/watch/.env`. The scr
 中文转写建议显式使用 `--language zh`，或在 `~/.config/watch/.env` 设置
 `WATCH_TRANSCRIPT_LANGUAGE=zh`。语言会进入本地缓存键，避免复用错误语言的旧结果；报告会把语言不匹配、异常重复和空转写记录为机器可读的 `quality_warnings`。
 
-每次运行都会在工作目录生成 `report.json`、`artifacts/transcript.json`、`artifacts/transcript.srt` 和 `artifacts/transcript.md`，标准输出只展示摘要和这些文件的绝对路径。需要核对短暂字幕时，可使用 `--timestamps 7:39 --timestamp-window 1` 获取相邻画面；原始 ASR 不会被 OCR 静默覆盖。
-
-OCR 是可选证据层：设置 `WATCH_OCR_COMMAND` 为包含 `{image}` 占位符的本地命令，并加 `--verify-transcript-with-frames`。命令输出会写入 `artifacts/ocr.json`，与 ASR 分开保存；未配置时报告 `ocr_unavailable`，不会伪装成已完成校正。
+每次运行都会在工作目录生成 `report.json`、`artifacts/transcript.json`、`artifacts/transcript.srt` 和 `artifacts/transcript.md`，标准输出只展示摘要和这些文件的绝对路径。需要核对短暂字幕时，可使用 `--timestamps 7:39 --timestamp-window 1` 获取相邻画面。
 
 - **Setup preflight failed** → run `python3 "${SKILL_DIR}/scripts/setup.py"` (auto-installs ffmpeg/yt-dlp via brew on macOS, scaffolds the `.env`). For API key, ask the user via `AskUserQuestion` and write it to `~/.config/watch/.env`.
 - **No transcript available** → captions missing AND (no Whisper key OR Whisper API failed). Script prints a hint pointing to setup. Proceed frames-only and tell the user.

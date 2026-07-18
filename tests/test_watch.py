@@ -393,6 +393,34 @@ def test_youtube_without_captions_or_backend_requires_download_permission(
     assert str(tmp_path / "download") in str(exc.value)
 
 
+def test_youtube_with_local_backend_still_requires_download_permission(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(watch, "fetch_captions", lambda _url, _out: {
+        "subtitle_path": None,
+        "info": {"duration": 12},
+        "downloaded": False,
+    })
+    monkeypatch.setattr(watch, "local_whisper_setup_message", lambda: None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "watch",
+            "https://www.youtube.com/watch?v=abc123",
+            "--detail",
+            "transcript",
+            "--whisper",
+            "local",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        watch.main()
+
+    assert "Ask the user for permission to download the audio" in str(exc.value)
+    assert "--allow-download --out-dir" in str(exc.value)
+
+
 def test_allow_download_uses_requested_download_folder(monkeypatch, tmp_path: Path):
     calls = []
     fake_video = tmp_path / "download" / "video.mp4"

@@ -9,8 +9,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shlex
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -19,7 +17,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent.resolve()
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from config import CONFIG_FILE, frame_cap, get_config, read_env_file  # noqa: E402
+from config import frame_cap, get_config, read_env_file  # noqa: E402
 from download import download, fetch_captions, is_url  # noqa: E402
 from frames import MAX_FPS, auto_fps, auto_fps_focus, extract_at_timestamps, extract_keyframes, extract_scene_or_uniform, format_time, get_metadata, merge_frames, parse_time, parse_timestamps  # noqa: E402
 from transcribe import filter_range, format_transcript, parse_transcript_file, parse_vtt  # noqa: E402
@@ -29,47 +27,6 @@ from whisper import assess_transcript_quality, load_api_key, local_whisper_setup
 def _is_youtube_url(source: str) -> bool:
     lowered = source.lower()
     return "youtube.com/" in lowered or "youtu.be/" in lowered
-
-
-def _can_transcribe_without_download(args) -> bool:
-    if args.no_whisper:
-        return False
-    if args.whisper == "local":
-        return local_whisper_setup_message() is None
-    backend, api_key = load_api_key(args.whisper)
-    return bool(backend and api_key)
-
-
-def _ocr_frames(frames: list[dict], work: Path) -> tuple[list[dict], str | None]:
-    """Run an explicitly configured OCR command on extracted frames.
-
-    The command must accept an image path where ``{image}`` appears and print
-    recognized text to stdout. This keeps MinerU/tesseract integrations
-    optional and preserves ASR text as the original evidence.
-    """
-    command = os.environ.get("WATCH_OCR_COMMAND", "").strip()
-    if not command:
-        path = work / "artifacts" / "ocr.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("[]\n", encoding="utf-8")
-        return [], "WATCH_OCR_COMMAND is not configured"
-    try:
-        template = shlex.split(command)
-    except ValueError as exc:
-        return [], f"invalid WATCH_OCR_COMMAND: {exc}"
-    if "{image}" not in template:
-        return [], "WATCH_OCR_COMMAND must contain {image}"
-    evidence: list[dict] = []
-    for frame in frames:
-        cmd = [str(frame["path"]) if part == "{image}" else part for part in template]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        text = (result.stdout or "").strip()
-        if result.returncode == 0 and text:
-            evidence.append({"timestamp_seconds": frame["timestamp_seconds"], "frame": frame["path"], "text": text})
-    path = work / "artifacts" / "ocr.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
-    return evidence, None
 
 
 def main() -> int:
@@ -103,10 +60,6 @@ def main() -> int:
     ap.add_argument(
         "--language", default=None,
         help="转写语言（例如 zh、en）；也可用 WATCH_TRANSCRIPT_LANGUAGE 持久配置",
-    )
-    ap.add_argument(
-        "--verify-transcript-with-frames", action="store_true",
-        help="对抽取的画面调用 WATCH_OCR_COMMAND，生成带时间证据的 OCR 建议，不覆盖 ASR",
     )
     ap.add_argument(
         "--transcript",
@@ -192,12 +145,10 @@ def main() -> int:
             _is_youtube_url(args.source)
             and not cue_timestamps
             and not args.allow_download
-            and not _can_transcribe_without_download(args)
         ):
             download_dir = Path.cwd() / "download"
             raise SystemExit(
-                "This YouTube video has no captions and no configured transcription backend "
-                "(no Whisper API key or local Whisper setup). Ask the user for permission to "
+                "This YouTube video has no captions. Ask the user for permission to "
                 f"download the audio, then re-run with `--allow-download --out-dir {download_dir}`."
             )
 
@@ -391,13 +342,6 @@ def main() -> int:
         for warning in quality_warnings:
             print(f"[watch] WARNING {warning['code']}: {warning['message']}", file=sys.stderr)
     artifact_paths = write_transcript_artifacts(work / "artifacts", transcript_segments, source=transcript_source or "none")
-    ocr_evidence: list[dict] = []
-    ocr_error: str | None = None
-    if args.verify_transcript_with_frames:
-        ocr_evidence, ocr_error = _ocr_frames(frames, work)
-        if ocr_error:
-            quality_warnings.append({"code": "ocr_unavailable", "severity": "medium", "message": ocr_error})
-        artifact_paths["ocr"] = str(work / "artifacts" / "ocr.json")
     report_path = work / "report.json"
     report = {
         "source": args.source,
@@ -406,7 +350,6 @@ def main() -> int:
         "resolution": {"width": meta.get("width"), "height": meta.get("height")},
         "transcript": {"source": transcript_source, "language": language or "auto", "segments": transcript_segments, "artifacts": artifact_paths},
         "quality_warnings": quality_warnings,
-        "ocr_evidence": ocr_evidence,
         "frames": frames,
         "timestamp_window_seconds": args.timestamp_window,
         "cache": {"work_dir": str(work)},
