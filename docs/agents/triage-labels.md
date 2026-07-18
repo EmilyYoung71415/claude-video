@@ -23,3 +23,9 @@ When a skill mentions a role, use the corresponding label string from this table
 | `next:human` | Human 回答决策问题、审阅并合并 PR，或处理需要人工授权的阻塞。 |
 
 Home Repo Issue 是当前状态的权威入口；PR 可镜像同一个 `next:*` 标签，方便从 PR 列表找到下一动作，但不能创建第二个不同状态。
+
+## 与本地分诊标签的边界
+
+`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human` 和 `wontfix` 是入口分诊标签：它们回答“这项工作是否已经准备好进入哪个处理角色”。事项开始执行后，应移除入口分诊标签，只保留一个 `next:*` 标签回答“当前交接后下一步由谁动作”。
+
+因此，`ready-for-human` 不等同于 `next:human`：前者是尚未开始执行的分诊结果，后者是执行过程中等待 Human 决策、复核或合并。`ask-matt` 是选择 skill/flow 的路由器，不是第三套状态标签。
