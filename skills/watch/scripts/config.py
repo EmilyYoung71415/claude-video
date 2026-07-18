@@ -41,7 +41,7 @@ def read_env_file(path: Path | None = None) -> dict[str, str]:
                 if ch == "#" and i > 0 and value[i - 1] in " \t":
                     value = value[:i].rstrip()
                     break
-        values[key.strip()] = value
+        values[key.strip()] = os.path.expandvars(os.path.expanduser(value))
     return values
 
 

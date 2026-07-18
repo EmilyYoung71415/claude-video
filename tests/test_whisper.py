@@ -234,6 +234,16 @@ class TestLocalWhisperConfig:
         assert "WATCH_LOCAL_WHISPER_MODEL" in msg
         assert str(whisper.CONFIG_FILE) in msg
 
+    def test_cache_key_isolated_by_language(self, tmp_path):
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"video")
+        status = {"binary": "/bin/whisper", "model": "/tmp/model"}
+        assert whisper.local_cache_key(video, status, 10, "zh") != whisper.local_cache_key(video, status, 10, "en")
+
+    def test_quality_warns_on_english_for_chinese(self):
+        warnings = whisper.assess_transcript_quality([{"text": "This is an English hallucination repeated repeated repeated"}], "zh")
+        assert {w["code"] for w in warnings} >= {"language_mismatch"}
+
 
 class TestLocalWhisperTranscription:
     @pytest.fixture(autouse=True)
@@ -332,6 +342,111 @@ Path(out_prefix + ".json").write_text(json.dumps({
         for call in call_lines:
             assert "-m" in call["args"]
             assert str(model) in call["args"]
+
+    def test_local_transcription_passes_extra_args(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        video = tmp_path / "clip.mp4"
+        subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-t", "1", "-i", "color=c=blue:s=160x120:r=10",
+                "-f", "lavfi", "-t", "1", "-i", "sine=frequency=440:sample_rate=16000",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-shortest",
+                str(video),
+            ],
+            check=True,
+        )
+        fake = tmp_path / "fake_whisper.py"
+        calls = tmp_path / "calls.json"
+        fake.write_text(
+            """#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+out_prefix = args[args.index("-of") + 1]
+Path(__file__).with_name("calls.json").write_text(json.dumps(args), encoding="utf-8")
+Path(out_prefix + ".json").write_text(json.dumps({
+    "transcription": [
+        {"offsets": {"from": 0, "to": 1000}, "text": "extra args transcript"}
+    ]
+}), encoding="utf-8")
+""",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        model = tmp_path / "model.bin"
+        model.write_text("model", encoding="utf-8")
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_BIN", str(fake))
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_MODEL", str(model))
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_CHUNK_SECONDS", "10")
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_ARGS", "-ng --language auto")
+
+        segments, _backend = whisper.transcribe_video_local(video, tmp_path / "audio.mp3")
+
+        assert [seg["text"] for seg in segments] == ["extra args transcript"]
+        assert json.loads(calls.read_text(encoding="utf-8"))[-3:] == ["-ng", "--language", "auto"]
+
+    def test_local_transcription_retries_cpu_after_gpu_allocation_failure(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ):
+        video = tmp_path / "clip.mp4"
+        subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-t", "1", "-i", "color=c=blue:s=160x120:r=10",
+                "-f", "lavfi", "-t", "1", "-i", "sine=frequency=440:sample_rate=16000",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-shortest",
+                str(video),
+            ],
+            check=True,
+        )
+        fake = tmp_path / "fake_whisper.py"
+        calls = tmp_path / "calls.jsonl"
+        fake.write_text(
+            """#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+calls = Path(__file__).with_name("calls.jsonl")
+with calls.open("a", encoding="utf-8") as fh:
+    fh.write(json.dumps(args) + "\\n")
+if "-ng" not in args:
+    sys.stderr.write("ggml_metal_buffer_init: error: failed to allocate buffer")
+    raise SystemExit(1)
+out_prefix = args[args.index("-of") + 1]
+Path(out_prefix + ".json").write_text(json.dumps({
+    "transcription": [
+        {"offsets": {"from": 0, "to": 1000}, "text": "cpu retry transcript"}
+    ]
+}), encoding="utf-8")
+""",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        model = tmp_path / "model.bin"
+        model.write_text("model", encoding="utf-8")
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_BIN", str(fake))
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_MODEL", str(model))
+        monkeypatch.setenv("WATCH_LOCAL_WHISPER_CHUNK_SECONDS", "10")
+
+        segments, _backend = whisper.transcribe_video_local(video, tmp_path / "audio.mp3")
+
+        calls = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
+        assert [seg["text"] for seg in segments] == ["cpu retry transcript"]
+        assert len(calls) == 2
+        assert "-ng" not in calls[0]
+        assert "-ng" in calls[1]
 
     def test_local_transcription_writes_manifest_and_resumes_completed_chunks(
         self,

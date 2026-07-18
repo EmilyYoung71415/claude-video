@@ -7,6 +7,10 @@ then Reads each frame path to see the video.
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import shlex
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -15,11 +19,11 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent.resolve()
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from config import frame_cap, get_config  # noqa: E402
+from config import CONFIG_FILE, frame_cap, get_config, read_env_file  # noqa: E402
 from download import download, fetch_captions, is_url  # noqa: E402
 from frames import MAX_FPS, auto_fps, auto_fps_focus, extract_at_timestamps, extract_keyframes, extract_scene_or_uniform, format_time, get_metadata, merge_frames, parse_time, parse_timestamps  # noqa: E402
 from transcribe import filter_range, format_transcript, parse_transcript_file, parse_vtt  # noqa: E402
-from whisper import load_api_key, local_whisper_setup_message, transcribe_video, transcribe_video_local  # noqa: E402
+from whisper import assess_transcript_quality, load_api_key, local_whisper_setup_message, transcribe_video, transcribe_video_local, write_transcript_artifacts  # noqa: E402
 
 
 def _is_youtube_url(source: str) -> bool:
@@ -34,6 +38,38 @@ def _can_transcribe_without_download(args) -> bool:
         return local_whisper_setup_message() is None
     backend, api_key = load_api_key(args.whisper)
     return bool(backend and api_key)
+
+
+def _ocr_frames(frames: list[dict], work: Path) -> tuple[list[dict], str | None]:
+    """Run an explicitly configured OCR command on extracted frames.
+
+    The command must accept an image path where ``{image}`` appears and print
+    recognized text to stdout. This keeps MinerU/tesseract integrations
+    optional and preserves ASR text as the original evidence.
+    """
+    command = os.environ.get("WATCH_OCR_COMMAND", "").strip()
+    if not command:
+        path = work / "artifacts" / "ocr.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("[]\n", encoding="utf-8")
+        return [], "WATCH_OCR_COMMAND is not configured"
+    try:
+        template = shlex.split(command)
+    except ValueError as exc:
+        return [], f"invalid WATCH_OCR_COMMAND: {exc}"
+    if "{image}" not in template:
+        return [], "WATCH_OCR_COMMAND must contain {image}"
+    evidence: list[dict] = []
+    for frame in frames:
+        cmd = [str(frame["path"]) if part == "{image}" else part for part in template]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        text = (result.stdout or "").strip()
+        if result.returncode == 0 and text:
+            evidence.append({"timestamp_seconds": frame["timestamp_seconds"], "frame": frame["path"], "text": text})
+    path = work / "artifacts" / "ocr.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
+    return evidence, None
 
 
 def main() -> int:
@@ -59,6 +95,18 @@ def main() -> int:
         help="Comma-separated absolute timestamps (SS, MM:SS, HH:MM:SS) to grab a frame at, "
              "e.g. transcript-flagged 'look here' moments. Added on top of the detail frames "
              "(reserved against the cap); with --detail transcript these become the only frames.",
+    )
+    ap.add_argument(
+        "--timestamp-window", type=float, default=0.0,
+        help="围绕每个 --timestamps 时间点取帧的半窗口秒数（例如 1.0 会取 -1/0/+1 秒）",
+    )
+    ap.add_argument(
+        "--language", default=None,
+        help="转写语言（例如 zh、en）；也可用 WATCH_TRANSCRIPT_LANGUAGE 持久配置",
+    )
+    ap.add_argument(
+        "--verify-transcript-with-frames", action="store_true",
+        help="对抽取的画面调用 WATCH_OCR_COMMAND，生成带时间证据的 OCR 建议，不覆盖 ASR",
     )
     ap.add_argument(
         "--transcript",
@@ -104,6 +152,11 @@ def main() -> int:
         raise SystemExit("--max-frames must be greater than zero")
     budget_cap = max_frames if max_frames is not None else 100
     cue_timestamps = parse_timestamps(args.timestamps)
+    if args.timestamp_window < 0:
+        raise SystemExit("--timestamp-window must be non-negative")
+    language = args.language or os.environ.get("WATCH_TRANSCRIPT_LANGUAGE") or read_env_file().get("WATCH_TRANSCRIPT_LANGUAGE")
+    if language:
+        language = language.strip()
 
     if args.out_dir:
         work = Path(args.out_dir).expanduser().resolve()
@@ -228,6 +281,7 @@ def main() -> int:
             max_frames=max_frames,
             start_seconds=start_sec,
             end_seconds=end_sec,
+            window_seconds=args.timestamp_window,
         )
         if cue_meta.get("dropped_out_of_window"):
             print(
@@ -295,6 +349,7 @@ def main() -> int:
                 all_segments, used_backend = transcribe_video_local(
                     video_path,
                     work / "audio.mp3",
+                    language=language,
                 )
                 transcript_segments = filter_range(all_segments, start_sec, end_sec) if focused else all_segments
                 transcript_text = format_transcript(transcript_segments)
@@ -331,6 +386,32 @@ def main() -> int:
         print("[watch] no audio stream found — proceeding without transcription", file=sys.stderr)
 
     info = dl.get("info") or {}
+    quality_warnings = assess_transcript_quality(transcript_segments, language)
+    if quality_warnings:
+        for warning in quality_warnings:
+            print(f"[watch] WARNING {warning['code']}: {warning['message']}", file=sys.stderr)
+    artifact_paths = write_transcript_artifacts(work / "artifacts", transcript_segments, source=transcript_source or "none")
+    ocr_evidence: list[dict] = []
+    ocr_error: str | None = None
+    if args.verify_transcript_with_frames:
+        ocr_evidence, ocr_error = _ocr_frames(frames, work)
+        if ocr_error:
+            quality_warnings.append({"code": "ocr_unavailable", "severity": "medium", "message": ocr_error})
+        artifact_paths["ocr"] = str(work / "artifacts" / "ocr.json")
+    report_path = work / "report.json"
+    report = {
+        "source": args.source,
+        "title": info.get("title") or (Path(args.source).name if not url_source else None),
+        "duration_seconds": full_duration,
+        "resolution": {"width": meta.get("width"), "height": meta.get("height")},
+        "transcript": {"source": transcript_source, "language": language or "auto", "segments": transcript_segments, "artifacts": artifact_paths},
+        "quality_warnings": quality_warnings,
+        "ocr_evidence": ocr_evidence,
+        "frames": frames,
+        "timestamp_window_seconds": args.timestamp_window,
+        "cache": {"work_dir": str(work)},
+    }
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print()
     print("# watch: video report")
@@ -350,6 +431,7 @@ def main() -> int:
         print(f"- **Resolution:** {meta['width']}x{meta['height']} ({meta.get('codec') or 'unknown codec'})")
     range_mode = "focused" if focused else "full"
     print(f"- **Detail:** {detail}")
+    print(f"- **Language:** {language or 'auto'}")
     detail_count = frame_meta.get("selected_count", 0)
     if detail != "transcript":
         cap_label = "unlimited" if detail_budget is None else str(detail_budget)
@@ -380,6 +462,9 @@ def main() -> int:
         )
     else:
         print("- **Transcript:** none available")
+    if quality_warnings:
+        print(f"- **Quality warnings:** {len(quality_warnings)} (see `{report_path}`)")
+    print(f"- **Structured output:** `{report_path}`")
 
     if detail == "token-burner" and len(frames) > 250:
         print()

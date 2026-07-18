@@ -329,6 +329,7 @@ def extract_at_timestamps(
     max_frames: int | None = None,
     start_seconds: float | None = None,
     end_seconds: float | None = None,
+    window_seconds: float = 0.0,
 ) -> tuple[list[dict], dict]:
     """Grab exactly one frame at each requested timestamp (transcript cues).
 
@@ -347,7 +348,14 @@ def extract_at_timestamps(
 
     lo = start_seconds or 0.0
     hi = end_seconds if end_seconds is not None else float("inf")
-    requested = sorted(set(round(float(t), 2) for t in timestamps))
+    if window_seconds < 0:
+        raise SystemExit("timestamp window must be non-negative")
+    requested = sorted({
+        round(float(t) + delta, 2)
+        for t in timestamps
+        for delta in ({-window_seconds, 0.0, window_seconds} if window_seconds else {0.0})
+        if float(t) + delta >= 0
+    })
     in_window = [t for t in requested if lo <= t <= hi]
     dropped = len(requested) - len(in_window)
 
@@ -377,7 +385,8 @@ def extract_at_timestamps(
                 "index": len(out),
                 "timestamp_seconds": t,
                 "path": str(path),
-                "reason": "transcript-cue",
+                "reason": "transcript-cue" if not window_seconds else "transcript-cue-window",
+                "requested_timestamp_seconds": next((base for base in timestamps if abs(float(base) - t) <= window_seconds), t),
             })
 
     meta = {
@@ -386,6 +395,7 @@ def extract_at_timestamps(
         "selected_count": len(out),
         "dropped_out_of_window": dropped,
         "fallback": False,
+        "window_seconds": window_seconds,
     }
     return out, meta
 
