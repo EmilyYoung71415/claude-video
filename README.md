@@ -1,20 +1,24 @@
 # /watch
 
-**Give Claude the ability to watch any video.**
+**让 Claude 能够观看并理解视频。**
 
-Claude Code (recommended — auto-updates via marketplace):
+> [!IMPORTANT]
+> 本仓库是基于 [`bradautomates/claude-video`](https://github.com/bradautomates/claude-video) 开发的分支版本（Fork）。本项目包含与上游不同的改动；为确保使用本项目提供的功能，请按下方命令从 `EmilyYoung71415/claude-video` 安装，不要使用上游仓库地址。
+
+Claude Code（推荐，可通过市场更新）：
+
 ```
-/plugin marketplace add bradautomates/claude-video
+/plugin marketplace add EmilyYoung71415/claude-video
 /plugin install watch@claude-video
 ```
 
-Codex, Cursor, Copilot, Gemini CLI, or any of 50+ [Agent Skills](https://agentskills.io) hosts:
+Codex、Cursor、Copilot、Gemini CLI 或其他支持 [Agent Skills](https://agentskills.io) 的宿主：
 ```bash
-npx skills add bradautomates/claude-video -g
+npx skills add EmilyYoung71415/claude-video -g
 ```
-(`-g` installs globally for your user, available across all projects. Drop it to scope per-project.)
+`-g` 表示为当前用户全局安装，可供所有项目使用；去掉 `-g` 则只安装到当前项目。
 
-More install options (claude.ai web, manual) in the [Install](#install) section below.
+更多安装方式（包括 claude.ai 网页版和从源码手动安装）请参阅[安装](#install)。
 
 Zero config to start — `yt-dlp` and `ffmpeg` install on first run via `brew` on macOS (Linux/Windows print exact commands). Captions cover most public videos for free. Whisper API key is only needed when a video has no captions.
 
@@ -103,60 +107,70 @@ The `--detail` dial trades speed and token cost for visual fidelity. Numbers bel
 
 End-to-end from a cold URL, `transcript` is the cheapest mode by far; the frame modes add the shared ~37 s download on top of the extraction times above.
 
-## Install
+<a id="install"></a>
 
-| Surface | Install |
+## 安装（Install）
+
+以下所有方式都以本 fork 的源码为安装来源。
+
+| 使用环境 | 安装方式 |
 |---------|---------|
-| **Claude Code** | `/plugin marketplace add bradautomates/claude-video` then `/plugin install watch@claude-video` |
-| **Codex, Cursor, Copilot, Gemini CLI, +50 more** | `npx skills add bradautomates/claude-video -g` |
-| **claude.ai** (web) | [Download `watch.skill`](https://github.com/bradautomates/claude-video/releases/latest) → Settings → Capabilities → Skills → `+` |
-| **Manual / dev** | `git clone` then symlink `skills/watch` into your host's skills dir (see below) |
+| **Claude Code** | 先执行 `/plugin marketplace add EmilyYoung71415/claude-video`，再执行 `/plugin install watch@claude-video` |
+| **Codex、Cursor、Copilot、Gemini CLI 等** | `npx skills add EmilyYoung71415/claude-video -g` |
+| **claude.ai 网页版** | 克隆本仓库并构建 `dist/watch.skill`，然后在 Settings → Capabilities → Skills → `+` 上传 |
+| **手动安装 / 开发** | 克隆本仓库，再将 `skills/watch` 链接到宿主的 skills 目录（见下文） |
 
 ### Claude Code
 
 ```
-/plugin marketplace add bradautomates/claude-video
+/plugin marketplace add EmilyYoung71415/claude-video
 /plugin install watch@claude-video
 ```
 
-Update later with `/plugin update watch@claude-video`.
+后续可执行 `/plugin update watch@claude-video` 更新。市场来源保持为本 fork，因此更新也会继续使用本项目源码。
 
-### Codex, Cursor, Copilot, Gemini CLI, and 50+ other hosts
+### Codex、Cursor、Copilot、Gemini CLI 及其他宿主
 
-The [Agent Skills](https://agentskills.io) CLI installs the skill into whatever agents it detects:
+[Agent Skills](https://agentskills.io) 命令行工具会为检测到的智能体宿主安装本技能：
 
 ```bash
-npx skills add bradautomates/claude-video -g
+npx skills add EmilyYoung71415/claude-video -g
 ```
 
-`-g` installs globally for your user (`~/.codex/skills`, `~/.cursor/skills`, etc.); drop it to install into the current project instead. Useful flags:
+`-g` 会安装到当前用户的全局目录（如 `~/.codex/skills`、`~/.cursor/skills`）；去掉它则安装到当前项目。常用参数：
 
-- `-a, --agent <names…>` — target specific hosts, e.g. `-a codex -a cursor`
-- `-l, --list` — list the skills in this repo without installing
-- `--copy` — copy files instead of symlinking (for filesystems without symlink support)
+- `-a, --agent <names…>`：指定宿主，例如 `-a codex -a cursor`
+- `-l, --list`：只列出本仓库中的技能，不执行安装
+- `--copy`：复制文件而不是创建符号链接，适用于不支持符号链接的文件系统
 
-The CLI discovers the skill from `skills/watch/SKILL.md` and copies the whole folder — `SKILL.md` plus its `scripts/` runtime — as a self-contained unit. `SKILL.md` resolves its own scripts relative to wherever it was installed, so it works the same on every host.
+命令行工具会从 `skills/watch/SKILL.md` 发现技能，并将整个 `skills/watch` 目录作为一个自包含单元安装，其中包括 `SKILL.md` 和 `scripts/` 运行脚本。`SKILL.md` 会相对于自身安装位置查找脚本，因此各宿主使用的是同一份本项目源码。
 
-Update later with `npx skills update watch -g`.
+后续可执行 `npx skills update watch -g` 更新。
 
 ### claude.ai (web)
 
-1. [Download `watch.skill`](https://github.com/bradautomates/claude-video/releases/latest) from the latest release.
-2. Go to Settings → Capabilities → Skills.
-3. Click `+` and drop the file in.
-
-Enable "Code execution and file creation" under Capabilities first — the skill shells out to `ffmpeg` and `yt-dlp`, so it won't run without it.
-
-### Manual (developer)
-
-Clone the repo and symlink the self-contained skill folder into your host's skills directory — the symlink keeps the install in sync with your working tree as you edit:
+claude.ai 使用的安装包也应从本 fork 源码构建：
 
 ```bash
-git clone https://github.com/bradautomates/claude-video.git
+git clone https://github.com/EmilyYoung71415/claude-video.git
+cd claude-video
+bash skills/watch/scripts/build-skill.sh
+```
+
+构建完成后，在 claude.ai 中进入 Settings → Capabilities → Skills，点击 `+` 并上传 `dist/watch.skill`。
+
+请先在 Capabilities 中启用“Code execution and file creation”。本技能需要运行 `ffmpeg` 和 `yt-dlp`，未启用时无法工作。
+
+### 手动安装（开发者）
+
+克隆本 fork，并将自包含的技能目录链接到宿主的 skills 目录。使用符号链接后，本地源码修改会直接反映到安装结果中：
+
+```bash
+git clone https://github.com/EmilyYoung71415/claude-video.git
 ln -s "$(pwd)/claude-video/skills/watch" ~/.claude/skills/watch   # or ~/.codex/skills/watch
 ```
 
-For claude.ai, build the `.skill` bundle from source: `bash skills/watch/scripts/build-skill.sh` produces `dist/watch.skill`.
+如需用于 claude.ai，请执行 `bash skills/watch/scripts/build-skill.sh` 从源码生成 `dist/watch.skill`。
 
 ## First run
 
@@ -359,24 +373,24 @@ Releasing: tag `vX.Y.Z`, push the tag. The workflow builds `dist/watch.skill` an
 
 See [CHANGELOG.md](CHANGELOG.md) for version history.
 
-## Open source
+## 开源说明（Open Source）
 
-MIT license.
+本项目使用 MIT 许可证。
 
-Built on `yt-dlp`, `ffmpeg`, and Claude's multimodal `Read` tool. Whisper transcription via [Groq](https://groq.com) or [OpenAI](https://openai.com).
+项目基于 `yt-dlp`、`ffmpeg` 和 Claude 的多模态 `Read` 工具构建，并通过 [Groq](https://groq.com) 或 [OpenAI](https://openai.com) 提供 Whisper 转写能力。
 
-Built by Brad Bonanno — I make content about building with AI on [YouTube (@bradbonanno)](https://www.youtube.com/@bradbonanno), and build AI operating systems for businesses at [Solaris Automation](https://www.solarisautomation.io/). If `/watch` saves you from scrubbing through a video, come say hi on the channel.
+原项目由 Brad Bonanno 创建，详见[上游仓库](https://github.com/bradautomates/claude-video)。本 fork 在其基础上继续开发；本项目的安装、更新和发布均以 `EmilyYoung71415/claude-video` 中的源码为准。
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=bradautomates%2Fclaude-video&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=bradautomates/claude-video&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=bradautomates/claude-video&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=bradautomates/claude-video&type=date&legend=top-left" />
- </picture>
+<a href="https://www.star-history.com/?repos=EmilyYoung71415%2Fclaude-video&type=date&legend=top-left">
+  <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=EmilyYoung71415/claude-video&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=EmilyYoung71415/claude-video&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=EmilyYoung71415/claude-video&type=date&legend=top-left" />
+  </picture>
 </a>
 
 ---
 
-[github.com/bradautomates/claude-video](https://github.com/bradautomates/claude-video) · [@bradbonanno](https://www.youtube.com/@bradbonanno) · [Solaris Automation](https://www.solarisautomation.io/) · [LICENSE](LICENSE)
+[本项目源码](https://github.com/EmilyYoung71415/claude-video) · [上游项目](https://github.com/bradautomates/claude-video) · [LICENSE](LICENSE)
