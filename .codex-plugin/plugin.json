@@ -3,10 +3,10 @@
   "version": "0.2.0",
   "description": "Let Claude watch a video. Downloads with yt-dlp, extracts auto-scaled frames with ffmpeg, pulls captions or falls back to Whisper, and hands frames + transcript to Claude so it can answer questions about the video.",
   "author": {
-    "name": "Bradley Bonanno"
+    "name": "EmilyYoung71415"
   },
-  "homepage": "https://github.com/bradautomates/claude-video",
-  "repository": "https://github.com/bradautomates/claude-video",
+  "homepage": "https://github.com/EmilyYoung71415/claude-video",
+  "repository": "https://github.com/EmilyYoung71415/claude-video",
   "license": "MIT",
   "keywords": [
     "video",
@@ -26,13 +26,13 @@
     "displayName": "watch",
     "shortDescription": "Give Claude a video input — paste a URL or path and ask about it.",
     "longDescription": "watch adds a skill that lets the agent watch any video: it downloads with yt-dlp, extracts auto-scaled frames with ffmpeg, pulls a timestamped transcript from native captions (or the Whisper API as a fallback), and hands frames + transcript to the model so it can answer questions grounded in what's actually on screen and in the audio.",
-    "developerName": "Bradley Bonanno",
+    "developerName": "EmilyYoung71415",
     "category": "Productivity",
     "capabilities": [
       "Interactive",
       "Read"
     ],
-    "websiteURL": "https://github.com/bradautomates/claude-video",
+    "websiteURL": "https://github.com/EmilyYoung71415/claude-video",
     "defaultPrompt": [
       "/watch https://youtu.be/dQw4w9WgXcQ what happens at the 30 second mark?",
       "/watch ~/Movies/screen-recording.mp4 when does the UI break?",
